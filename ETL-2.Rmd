@@ -1,0 +1,250 @@
+---
+title: "SYS 5581 Project - Extract, Transform, and Load Data"
+author: "Nick Coronato"
+date: "Version of `r Sys.Date()` | Due 2021-02-22"
+output: 
+    pdf_document:
+      keep_md: true
+---
+
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+```
+
+**Step 1: Identify a Time Series data set that you want to work with**
+
+For this project, I will be analyzing a set of exercise data for 186 patients.
+
+**Step 2: Acquire the data from its source location, reproducibly.**
+
+For this project, my data is stored on my local machine
+
+*Note: Ideally the data will be stored at and read from a Github repository. (Note: permission was granted to use this data, and no identifiable patient information is included in the raw data.)*
+
+```{r Read in data, message = FALSE}
+url = 'https://github.com/uva-eng-time-series-sp21/coronato-nicholas/blob/main/CPET_raw_data.csv'
+
+# To download data from Github, need to access the "Raw" version:
+url <- "https://raw.githubusercontent.com/uva-eng-time-series-sp21/coronato-nicholas/main/CPET_raw_data2.csv?token=AAWINTXAEGBKO2L3X6AQOSDAF63HK"
+
+# Alas, the token apparently expires after one download. So we'll load the file from local copy.
+
+(CPET_raw  <-  read_delim("CPET_raw_data2.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "HR" = col_double(),
+                                          "VO2" = col_double(),
+                                          "VO2/kg" = col_double(),
+                                          "VCO2" = col_double(),
+                                          "RQ" = col_double(),
+                                          "VE" = col_double(),
+                                          "VE/VO2" = col_double(),
+                                          "VE/VCO2" = col_double(),
+                                          "Work" = col_double(),
+                                          "PetO2" = col_double(),
+                                          "PetCO2" = col_double(),
+                                          "VEO22"= col_double(),
+                                          "TMSPD" = col_double(),
+                                          "TMELV" = col_double()
+                         )))
+```
+
+**Step 3: Organize your data into a *tidy* data frame.**
+
+Organize by taking out the non-useful variables.
+
+```{r Organize data into a tidy data frame}
+CPET_raw <- select(CPET_raw, -LocalTime, -FE02, -FECO2,	-RER,	-RR,	-METS,	-Vtex,	-Vtin, -Source, -TypeUser, -Summary)
+
+CPET_raw %>% filter(PatientId != SessionId)
+
+CPET_raw %>% 
+  select_if(function(x) !all(is.na(x)))
+
+```
+
+Make a new variable called Index so that each observation is individually identifiable, i.e. Session 1, Obs 1
+
+```{r Generate index variable}
+
+#load package
+require(data.table)
+
+#  Turn data.frame into a data.table
+CPET_ts2 <- data.table( CPET_raw )
+
+#  Get running count by SessionId
+CPET_ts2[ , Index := 1:.N , by = c("SessionId") ]
+
+```
+
+Make Index variable to be a two digit readout (i.e. 01, 02, ...)
+
+```{r Index variable to two digits, include = FALSE}
+
+#Make Index variable to be a two digit readout (i.e. 01, 02, ...)
+CPET_ts2$Index <- sprintf("%02d", as.numeric(CPET_ts2$Index))
+
+```
+
+Convert time column into a more usable value (seconds instead of HH:MM:SS)
+
+```{r Convert time variable to HHMMSS, echo = FALSE}
+#Convert time column into a more usable value (seconds instead of HH:MM:SS)
+
+CPET_ts <- CPET_ts2 %>% 
+  mutate(NewTime = hms(Time)) %>% 
+   unite(identifier, c(SessionId, Index), sep = ".", remove = FALSE) %>% 
+  select(PatientId, SessionId, identifier, NewTime, everything())
+
+```
+
+This can be used to create a dataframe of HR over time, per patient session.
+
+```{r Create a HR_by_patient object}
+
+#This can be used to create a df of HR over time, per patient session
+
+(CPET_ts %>%
+  group_by(SessionId, NewTime) %>%
+  summarise(HR) -> HR_by_patient)
+```
+
+This chunk is for example purposes; ggplot of Patient 1's heart rate over time.
+
+```{r Example ggplot HR over time, echo = FALSE}
+
+# This chunk is for example purposes; ggplot of Patient 1's heart rate over time.
+
+CPET_ts %>%
+  filter(SessionId == 1) %>%
+  ggplot(mapping = aes(x = Time, y = HR)) +
+  geom_point() +
+  ggtitle("Patient 1 Heart Rate Over Time")
+
+```
+
+Generate and print the tsibble.
+
+```{r Generate tsibble, echo = FALSE}
+
+#Generate tsibble
+
+CPET_tsbl <- as_tsibble(CPET_ts, key = identifier, index = NewTime)
+
+#Print tsibble
+
+print(CPET_tsbl)
+
+
+```
+```{r}
+CPET_tsbl %>%
+  filter(PatientId %in% 1:3) %>%
+  ggplot(mapping = aes(x = Time, y = HR)) +
+  geom_line() +
+  ggtitle("Patient 1 Heart Rate Over Time")
+
+```
+```{r run diagnostics on tsibble}
+interval(CPET_tsbl)
+
+is_regular(CPET_tsbl)
+
+is_ordered(CPET_tsbl)
+
+has_gaps(CPET_tsbl) %>% filter(.gaps == TRUE)
+```
+# Redo code
+
+```{r}
+
+# Confirm that values of PatiendId and SessionId are always identical:
+CPET_raw %>% filter(PatientId != SessionId)  # Returns zero rows.
+
+CPET_raw %>%
+  select(-SessionId) %>%                        # Drop redundant SessionId field
+  select_if(function(x) !all(is.na(x))) %>%     # Drop fields containing only NA values
+  mutate(TestLevel = as.factor(TestLevel)) %>%  # Convert data type from text to factors
+  mutate(Time = lubridate::as.duration(hms(Time))) %>%  # Convert Time to duration type 
+  mutate(PatientId = as.integer(PatientId)) %>% # Convert PatientId to integer type
+  select(PatientId, Time, everything()) -> CPET_rare
+
+# Reference: https://r4ds.had.co.nz/dates-and-times.html#durations 
+
+CPET_rare %>% arrange(desc(PatientId), desc(Time))
+
+CPET_rare %>% 
+  group_by(Time) %>% 
+  summarize(N = n())
+```
+```{r try to convert tibble to a tsibble}
+# CPET_rare %>% as_tsibble(index = Time, key = PatientId)
+# The above line throws an error: Says there are duplicates.
+# Check for duplicates:
+(CPET_rare %>% 
+  duplicates(index = Time, key = PatientId) -> CPET_dupes)
+
+# Examine these duplicates in the original CPET_raw table
+CPET_raw %>%
+  filter(PatientId %in% CPET_dupes$PatientId & lubridate::as.duration(hms(Time)) %in% CPET_dupes$Time)
+
+# Need somehow to resolve or drop duplicates. 
+# This code will drop the second record in each duplicated group:
+CPET_dupes %>%
+      group_by(PatientId, Time) %>%
+      slice(1)
+
+CPET_rare %>%
+      group_by(PatientId, Time) %>%
+      slice(1) %>%
+      ungroup() -> CPET_medium
+
+# Reference: https://stackoverflow.com/questions/22959635/remove-duplicated-rows-using-dplyr
+```
+
+```{r convert tibble to a tsibble}
+(CPET_medium %>% as_tsibble(index = Time, key = PatientId) -> CPET_tbl_ts)
+```
+
+```{r run diagnostics on new tsibble}
+interval(CPET_tbl_ts)
+
+is_regular(CPET_tbl_ts)
+
+is_ordered(CPET_tbl_ts)
+
+has_gaps(CPET_tbl_ts) 
+```
+
+```{r}
+CPET_tbl_ts %>%
+  filter(PatientId == 1) %>%
+  ggplot(mapping = aes(x = Time, y = HR)) +
+  geom_line() + geom_point() +
+  ggtitle("Patient 1 Heart Rate Over Time") + xlab("Time (seconds)") + ylab("Heart rate (s^-1)")
+```
+```{r}
+CPET_tbl_ts %>%
+  filter(PatientId %in% 1:4) %>%
+  feasts::autoplot(HR) + xlab("Time (seconds)") + ylab("Heart rate (s^-1)")
+```
+
+```{r Bin times into twenty-second intervals}
+# Reference: https://community.rstudio.com/t/how-to-bin-a-time-column-in-r/44867/2
+CPET_medium %>%
+  mutate(Time_20s = hms::round_hms(Time, secs = 20)) %>%
+  group_by(PatientId, Time_20s) %>%
+  summarise(HR20 = mean(HR)) %>%
+  ungroup() %>%
+  as_tsibble(index = Time_20s, key = PatientId)
+```
+
+```{r}
+CPET_medium %>% filter(HR == 0)
+```
+It looks like some of the patients have a recorded heart rate of zero. Either there is another round of data cleaning to do, or [some other procedue should be followed](https://www.youtube.com/watch?v=QcbR1J_4ICg).
+
