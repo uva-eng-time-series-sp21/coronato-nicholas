@@ -1,0 +1,36 @@
+---
+title: "SYS 5581 Project Concept Note: V2"
+author: "Nick Coronato"
+date: "February 24, 2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Forecasting US Airline Recovery**
+
+\setlength\parindent{18pt}
+
+  \indent  The COVID-19 pandemic brought leisure and business air travel to a near-screeching halt in the second quarter of calendar year 2020. Fear of the coronavirus's transmissibility and lethality kept many Americans from boarding a plane in non-emergency situations. Additionally, domestic and international travel responses basically enforced an immediate ban on unnecessary travel. As one would expect, this has devastated the entire travel industry.  Experts propose that a full recovery could take upwards of 2.5 years. Smaller airlines may not have that much time to stay afloat; several regional airlines in the US and abroad have already folded. The US airline giants have felt a certain effect from flight cancellations, policy changes, and incurred costs for healthy safety measures. 
+
+\indent The concept of this this project is to analyze historical data from the past two years (September 2018 to August 2020) to analyze the trends in commercial aviation. Data is open source and downloadable from the US Bureau of Transportation Statistics (BTS).  One particularly useful metric that the industry analyzes is Revenue Passenger Miles. 
+
+
+ $Revenue Passenger Miles = Number of Paying Passengers * Distance Traveled$
+
+
+The data set is entitled "3year_t100_data.csv" and is uploaded in my personal repository for the project.
+
+
+**The questions that I would attempt to answer focuses on a subset of US airline companies:**
+
+
+\indent  *Did any of the three major US carriers (American, Delta, United) perform best over the time period?*
+
+
+\indent  *When can we forecast Revenue Passenger Miles to return to pre-COVID-19 levels?*
+ 
+
+\pagebreak
