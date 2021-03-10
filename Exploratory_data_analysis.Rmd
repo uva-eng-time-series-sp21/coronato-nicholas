@@ -1,0 +1,229 @@
+---
+title: "SYS 5581 Project - Exploratory Data Analysis"
+author: "Nick Coronato"
+date: "Version of `r Sys.Date()` | Due 2021-03-10"
+output: pdf_document
+---
+
+
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+library(googledrive)  #Used for reading CSV file from my Google Drive folder
+
+options(scipen = 5)
+```
+
+**Step 1: Identify a Time Series data set that you want to work with**
+
+For this project, I will be analyzing a set of airline passenger data from the Bureau of Transportation Statistics (BTS). The data set includes air travel data from *January 2015* - *August 2020*.
+
+
+
+**Step 2: Acquire the data from its source location, reproducibly.**
+
+For this project, my data is stored on my local machine. The file name is "5year_t100_data.csv"
+
+Data was obtained from the BTS website: https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FIM
+or https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM
+
+*Note: Ideally the data will be stored at and read from a Github repository. *
+ 
+*Note 2: The BTS recently released 2020 data through November, so I updated the .csv file on my local machine with the new data. Also, I decided to go back 5 years instead of 2.*
+
+```{r Read in data, message = FALSE}
+t100_raw  <-  read_delim("5year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+                                          
+```
+
+**Step 3: Organize your data into a *tidy* data frame.**
+
+Organize by taking out the non-useful variables. Make another new variable called RPM (revenue passenger miles), which is simply Passengers X Miles for each observation. Put the Index variable in the first column (eventually it will be 4dig year, 2dig month). Put the Key variables next (unique_carrier, Passengers, Distance, RPM). Then all the other (possibly) relevant variables.
+
+```{r Organize data into a tidy data frame}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+
+```
+
+
+Make a new variable called YRMO that concatenates Year and Month into a YR-MO format. Make it a time series column.
+
+```{r Generate index variable for tsibble, message = FALSE}
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything())-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, YEAR, MONTH, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+```
+
+
+
+Some quality control checks.
+
+```{r Quality Control of tsibble}
+t100_ts_tbl %>% distinct() ->t100_ts_tbl  #remove duplicated rows, if any exist
+head(t100_ts_tbl)  #Check that each column got the right Type.
+```
+
+Generate and print the tsibble.
+
+```{r Generate tsibble, echo = FALSE}
+#Filter to see just the 3 Major Airlines: Delta American and United
+t100_ts_tbl %>%  filter(UNIQUE_CARRIER  %in% c("DL","AA","UA")) -> big3
+as_tsibble(big3, index = YRMO, key = UNIQUE_CARRIER) -> big3
+print(big3) #Print tsibble
+```
+
+
+
+***Exploratory Data Analysis*** 
+
+
+*Briefly characterize the data set.*
+
+Provide a brief example of the data, showing how they are structured.
+
+After extracting and transforming my data, I have a useful tibble with 204 observations. Each observation is a Monthly report of 9 variables. The time-series tibble called "big3" is the object I will be using for most analysis: it highlights the 3 U.S.-based  airline giants that could give useful information about passenger trends in the domestic market.
+
+I can view any of my trends for (Passengers, Seats, Miles Flown, Hours of Air Time) through ggplots like seen below.
+
+
+```{r, warning = FALSE, message = FALSE}
+#Show total passengers trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly Passengers") + scale_y_continuous()
+
+#Using the Feasts package (optional)
+# feasts::autoplot(big3, TotalPax) +
+#   ylab("Total Passengers per Month") +
+#   xlab("")
+# 
+
+
+#Show total Revenue Passenger Miles (RPM) trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly RPM")
+```
+
+Interesting note: United Airlines produces a consistently lower TotalPax count. The red line is a similar shape to DL and UA, but shifted down by about 5 million passengers per month. However, I noticed that they are near the same level of production of Revenue Passenger Miles. This makes me think that United Airlines moves way fewer passengers, but possibly over longer domestic routes, therefore producing a comparable RPM value every month.
+
+So I checked the distance flown statistics across the airlines.
+
+```{r}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black")
+```
+Yes, there seems to be evidence that the 3 airlines under investigation do have different strategies in terms of route lengths/distance flown in this data set. This could be a function of their actual corporate strategy, or just the nature of their "hub" locations, or even totally random. The chart below breaks it out by year and shows that United Airlines seems to fly longest distance routes (on average), American Airlines flies the shortest routes, and Delta's flight distance distribution is widely spread. Interesting stuff; maybe useful.
+
+```{r}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black") +
+  facet_grid(YEAR ~ .)
+```
+
+```{r}
+ggplot(big3, aes(x = TotalRPM, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black") +
+  facet_grid(YEAR ~ .)
+```
+
+```{r}
+#Seasonal plot
+big3 %>%
+  feasts::gg_season(TotalPax, labels = "both") + ylab("Total Passengers per Month")
+```
+
+
+The Seasonal Plot above shows a pretty clear representation of the seasonal trends in air travel amongst these three airlines. (Note: Y-axis is not consistent; adjusted for each airline). 
+
+Prior to 2020, the most popular year for air travel was 2018 (according to most metrics of interest here).
+
+Seasonal trends are somewhat as one would expect for air travel. We can see that February and September are the low points for passengers being transported, and the summer and holiday months create a spike for these 3 airlines.
+
+There was an interesting phenomenon for American Airlines in summer 2015, where their Total Passenger count increased greatly. This could be due to general corporate expansion, acquisition of new (or bigger) airplanes, or initiation of new flight routes. 
+
+(A little research showed that AA did place "the 'largest aircraft order in history' in July 2011, purchasing 460 'next generation' Boeing 737 and Airbus A320 aircraft for delivery between 2013 and 2022. Also, 2015 was the year they completed a merger with US Airways: On April 8, 2015, the Federal Aviation Administration awarded American Airlines and US Airways a single operating certificate." At some point in 2015, I'm assuming the Transportation Bureau started counting the former-US Airways flights as part of American Airlines, and it was probably during the June or July timeframe.)
+
+[https://en.wikipedia.org/wiki/History_of_American_Airlines] 
+
+
+I was interested to see what happened with the other metrics for AA during summer 2015.
+
+```{r}
+big3 %>% 
+  filter(UNIQUE_CARRIER == "AA") %>% 
+  feasts::gg_season(TotalDistance, labels = "both") + ylab("Total Distance Flown per Month")
+
+big3 %>% 
+  filter(UNIQUE_CARRIER == "AA") %>% 
+  feasts::gg_season(TotalAIR_TIME, labels = "both") + ylab("Total Air_time per Month")
+```
+
+Sure enough, American Airlines experienced a huge jump in summer '15, to where Distance and air time being flown became consistent with 2016-2019 levels. This leads me to believe that 2015 was a year in which external factors were at play -- important to note but probably will not play into my analysis any further.
+
+More directly to the questions I'm trying to answer:
+
+Another aspect of these gg_season plots that I see is the stabilization of Passengers flown as the year 2020 proceeded. The latest data in this set is from November 2020. We can see below how each airline performed through November 2020. Their monthly passenger numbers were essentially cut to near 500,000 by April 2020, and as of November they did climb back towards 5 million ( with American Airlines moving the most pax). This is roughly half the pre-COVID19 passenger count for these airlines. The question we can address is how long it may take to recover to pre-COVID19 numbers.
+
+```{r}
+#Show total passengers trend since 2020 Jan
+filter(big3, YEAR == "2020") -> big32020
+big32020 %>% 
+  ggplot(mapping = aes(x = MONTH, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many passengers did the Big 3 carry in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+```
+This one shows a similar story, in terms of Distance Flown over 2020.
+```{r}
+big32020 %>% 
+  ggplot(mapping = aes(x = MONTH, y = TotalDistance, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many MILES did the Big 3 fly in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+```
+I also wanted to plot some possibly related variables in a scatter plot, to see if there was anything to discover.
+
+Below is Air Time (hours spent in flight for the month) vs. Distance Flown (miles). Of course, as distance flown increases, we expect to see an increase in air time, but is it linear?
+```{r}
+#Is there a relationship between Total Air_Time and Distance Flown?
+big3 %>% 
+  ggplot(aes(x = TotalDistance, y = TotalAIR_TIME))+
+  geom_point(size=1, aes(colour = UNIQUE_CARRIER), alpha =0.5)+
+  labs(y = "Total Air Time (hours)", x = "Total Distance Flown (Miles)")
+```
+```{r}
+timedistancemodel <- lm(TotalAIR_TIME ~ TotalDistance, data = big3)
+summary(timedistancemodel)
+```
+
+
+```{r, echo = FALSE, message = FALSE}
+big3 %>% 
+  GGally::ggpairs(columns = 5:9)
+```
+The Ggally relationship plots above show correlation amongst features. Highly linear relationships seem to exist between many of these.
