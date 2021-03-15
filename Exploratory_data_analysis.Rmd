@@ -35,6 +35,7 @@ or https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM
  
 *Note 2: The BTS recently released 2020 data through November, so I updated the .csv file on my local machine with the new data. Also, I decided to go back 5 years instead of 2.*
 
+<<<<<<< HEAD
 
 ```{r Read CSV from Google Drive}
 library("googledrive")
@@ -49,6 +50,8 @@ t100_raw <- drive_download(
 )
 ```
 
+=======
+>>>>>>> b9ca9a3f60662e3d5dd7f07699f3bba8a477a678
 ```{r Read in data, message = FALSE}
 t100_raw  <-  read_delim("5year_t100_data.csv",",",
                          col_types = cols(.default = col_character(),
@@ -67,8 +70,11 @@ t100_raw  <-  read_delim("5year_t100_data.csv",",",
                                           
 ```
 
+<<<<<<< HEAD
 
 
+=======
+>>>>>>> b9ca9a3f60662e3d5dd7f07699f3bba8a477a678
 **Step 3: Organize your data into a *tidy* data frame.**
 
 Organize by taking out the non-useful variables. Make another new variable called RPM (revenue passenger miles), which is simply Passengers X Miles for each observation. Put the Index variable in the first column (eventually it will be 4dig year, 2dig month). Put the Key variables next (unique_carrier, Passengers, Distance, RPM). Then all the other (possibly) relevant variables.
@@ -195,10 +201,13 @@ There was an interesting phenomenon for American Airlines in summer 2015, where 
 
 I was interested to see what happened with the other metrics for AA during summer 2015.
 
+<<<<<<< HEAD
 The first chart depicts "Total Distance flown" per month during 2015.
 
 The second chart depicts "Total air time flown" per month during 2015.
 
+=======
+>>>>>>> b9ca9a3f60662e3d5dd7f07699f3bba8a477a678
 ```{r}
 big3 %>% 
   filter(UNIQUE_CARRIER == "AA") %>% 
@@ -209,7 +218,11 @@ big3 %>%
   feasts::gg_season(TotalAIR_TIME, labels = "both") + ylab("Total Air_time per Month")
 ```
 
+<<<<<<< HEAD
 Sure enough, American Airlines experienced a huge jump in summer '15, to where Distance and Air Time flown became consistent with 2016-2019 levels. This leads me to believe that 2015 was a year in which external factors were at play -- important to note but probably will not play into my analysis any further.
+=======
+Sure enough, American Airlines experienced a huge jump in summer '15, to where Distance and air time being flown became consistent with 2016-2019 levels. This leads me to believe that 2015 was a year in which external factors were at play -- important to note but probably will not play into my analysis any further.
+>>>>>>> b9ca9a3f60662e3d5dd7f07699f3bba8a477a678
 
 More directly to the questions I'm trying to answer:
 
@@ -219,7 +232,11 @@ Another aspect of these gg_season plots that I see is the stabilization of Passe
 #Show total passengers trend since 2020 Jan
 filter(big3, YEAR == "2020") -> big32020
 big32020 %>% 
+<<<<<<< HEAD
   ggplot(mapping = aes(x = MONTH, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many PASSENGERS did the Big 3 carry in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+=======
+  ggplot(mapping = aes(x = MONTH, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many passengers did the Big 3 carry in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+>>>>>>> b9ca9a3f60662e3d5dd7f07699f3bba8a477a678
 ```
 This one shows a similar story, in terms of Distance Flown over 2020.
 ```{r}
