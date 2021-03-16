@@ -1,0 +1,129 @@
+---
+title: "SYS 5581 Project - Extract, Transform, and Load Data - 2nd Attempt"
+author: "Nick Coronato"
+date: "Version of `r Sys.Date()` | Due 2021-03-01"
+output: pdf_document
+---
+
+
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+
+
+```
+
+**Step 1: Identify a Time Series data set that you want to work with**
+
+For this project, I will be analyzing a set of airline passenger data from the Bureau of Transportation Statistics (BTS). The data set includes air travel data from September 2018 - August 2020 (24 months).
+
+
+
+**Step 2: Acquire the data from its source location, reproducibly.**
+
+For this project, my data is stored on my local machine. The file name is "2year_t100_data.csv"
+
+Data was obtained from the BTS website: https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIL&QO_fu146_anzr=Nv4%20Pn44vr45
+
+*Note: Ideally the data will be stored at and read from a Github repository. *
+
+```{r Read in data, message = FALSE}
+
+t100_raw  <-  read_delim("2year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+                                          
+```
+
+**Step 3: Organize your data into a *tidy* data frame.**
+
+Organize by taking out the non-useful variables. Make another new variable called RPM (revenue passenger miles), which is simply Passengers X Miles for each observation. Put the Index variable in the first column (eventually it will be 4dig year, 2dig month). Put the Key variables next (unique_carrier, Passengers, Distance, RPM). Then all the other (possibly) relevant variables.
+
+```{r Organize data into a tidy data frame}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+
+```
+
+
+Make a new variable called YRMO that concatenates Year and Month into a YR-MO format. Make it a time series column.
+
+```{r Generate index variable for tsibble, message = FALSE}
+
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything(),-MONTH, -YEAR)-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+  
+```
+
+
+
+Some quality control checks.
+
+```{r Quality Control of tsibble}
+
+#Check that each column got the right Type.
+
+head(t100_ts_tbl)
+
+```
+
+
+This chunk is for example purposes; an unrefined ggplot of passnegers over time.
+
+```{r Example ggplot passengers over time, warning = FALSE, echo = FALSE}
+
+# This chunk is for example purposes
+
+
+# t100_ts_tbl %>% 
+#   filter(UNIQUE_CARRIER == c("UA","AA","DL")) %>% 
+#   autoplot(t100_ts_tbl,aes(YRMO,TotalPax, color = UNIQUE_CARRIER))
+
+t100_ts_tbl %>%
+  filter(UNIQUE_CARRIER == c("AA","UA","DL")) %>%
+  ggplot(mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_point() + ggtitle("3 Major Airlines Monthly Passengers")
+
+```
+
+
+Generate and print the tsibble.
+
+```{r Generate tsibble, echo = FALSE}
+
+#Print tsibble
+
+print(t100_ts_tbl)
+
+
+```
+
