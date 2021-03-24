@@ -1,0 +1,188 @@
+---
+title: "Project Proposal - Full Draft"
+author: "Nick Coronato"
+date: "Version of `r Sys.Date()` | Due 2021-03-24"
+output: pdf_document
+---
+
+SYS 5581: Time Series and Forecasting
+
+**Abstract**
+
+\indent The concept of this this project is to analyze historical data from the past five years (2015-2020) in order to understand passenger trends in commercial aviation. Data is open source and provided by the US Bureau of Transportation Statistics (BTS). Revenue Passenger Miles, a key indicator of an airline's operational load, can be modeled as a time series. In this research, I aim to provide insight on the forecast for recovery amongst three leading US airline carriers in the post-COVID-19 environment.
+
+
+
+**Introduction**
+
+  \indent  The COVID-19 pandemic brought leisure and business air travel to a near-screeching halt in the second quarter of calendar year 2020. Fear of the coronavirus's transmissibility and lethality kept many Americans from boarding a plane in non-emergency situations. Additionally, domestic and international policies basically enforced an immediate ban on unnecessary travel. As one would expect, this has severely impacted the entire travel industry.  Experts propose that a full recovery could take upwards of 2.5 years. Smaller airlines may not have that much time to stay afloat; several regional airlines in the US and abroad have already folded. The US airline giants have felt a certain effect from flight cancellations, policy changes, and incurred costs for healthy safety measures. 
+  
+  This project aims to utilize time series analysis methods to answer a simple question about commercial aviation:
+  
+  
+  ***How should we expect the largest US passenger airlines to operate in the aftermath of COVID-19?***
+
+
+  This question is one of many that will be asked in the coming months, as the demand for personal transportation is expected to eventually return to pre-pandemic levels or higher. The stakeholders in this industry are numerous: not just business travelers and vacationers or airline companies themselves, but practically anybody with a role or vested interest in moving people or things around the globe. The pace and magnitude of recovery for the air travel industry will have third order implications on fuel prices, employment rates, business logistics, the global economy, and so on. This particular question is important because it seeks to provide predictive insight to how the US airline giants will be expected to operate if the travel demand resumes in 2021 or 2022. If they can predict this, the airlines should be able to strategically ramp up and meet the demand. If they do not forecast appropriately, they may fail, this will affect nearly everybody in some way.
+  
+  I will attempt to answer this question by generating an accurate forecasting model for three large US airlines. The major assumption, designed to reduce problem complexity, is that our largest airlines will be the most likely to survive the pandemic period, and that they are representative of the domestic air travel market at large. The airlines under study - Delta, American, and United - undoubtedly have some of the greatest resources at their disposal, and therefore were decently postured to take on the sudden drop in demand for passenger travel. Another assumption is that future demand for air travel will be roughly equal to the levels seen in the data prior to Quarter 1, Calendar Year 2020. 
+  
+  My model will use that historical data to identify Revenue Passenger Mile trends right up to the COVID-19 onset, and then forecast the expected output (RPM) of Delta, American, and United if normal travel resumes.
+
+
+ $$Revenue Passenger Miles (RPM) = Number of Paying Passengers * Distance Traveled$$
+
+**The Data**
+
+ \indent  Data for this research is downloaded from the BTS website: https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FIM or https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM. 
+
+
+This website allows the user to select key metrics of airline performance by market (domestic segment or international) and by year, along with several other filters. I extracted the raw data (2015-2020NOV) for the following features:
+
+1. Departures Scheduled [integer]
+2. Departures Performed [integer]
+3. Payload (pounds gross weight) [integer]
+4. Seats [integer]
+5. Passengers [integer]
+6. Distance (miles) [integer]
+7. Air Time (minutes) [integer]
+8. Unique Carrier (Airline identifier) [factor]
+9. Origin Airport ID (five digit code) [factor]
+10. Origin City Name [factor]
+11. Origin State Name [factor]
+12. Origin Country [factor]
+13. Destination Airport ID (five digit code) [factor]
+14. Destination City Name [factor]
+15. Destination State Name [factor]
+16. Aircraft Type [factor]
+17. Year
+18. Quarter
+19. Month
+
+  The data I downloaded is structured as 1,031,938 rows of a .csv file, with headers that indicate each of the columns (features) identified above. Each row entry, or observation, is a flight segment. A domestic flight segment is defined as any route that terminated in the United States or its territories; it could have originated anywhere. 
+
+  Most route segments were executed multiple times throughout the time period, as indicated by the "Departures Performed" column. If multiple departures of the same segment were performed, the data is already captured in such a way that the other variables were updated; in other words, if two departures of a 100-passenger segment were conducted, then the corresponding "PASSENGERS" column indicates "200" for that segment. I did not have to multiply $(2 * 100)$ to manually calculate for repeat segments.
+  
+  I processed the raw data to fit the requirements of a tidy time series set. This required an aggregation of metrics at a *monthly* frequency. For example, all of the United Airlines segments during January 2015 were summed to form new features: Total Passengers, Total Air Time, etc. The time period of interest was January 2015 to November 2020. This produced 71 monthly observations for each of the "Big 3" airlines, which is a total of 213 data points for each metric. A monthly interpretation of historical travel data seemed most relevant and stable, as it appropriately highlights the seasonal trends of the year without being too granular.
+  
+  
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+library(googledrive)  #Used for reading CSV file from my Google Drive folder
+
+options(scipen = 5)
+```
+```{r Read CSV from Google Drive, include = FALSE}
+library("googledrive")
+(sharedrive <- drive_get("https://drive.google.com/file/d/1Z41tBkWTtdVNUJyfhLEVjeDn7f_CBI9x/view?usp=sharing"))
+
+# WARNING : this is a large file (about 118MB). The googledrive package should install this to your current working directory, and the following code chunk should be able to read it in to R. You may need to confirm your Google account token in the R console when running this particular chunk. Either way, R should give you a message to inform you where the file was downloaded on your local machine.
+
+t100_raw <- drive_download(
+  "5year_t100_data.csv",
+  path = "5year_t100_data.csv",
+  overwrite = TRUE
+)
+```
+```{r Read in data, include = FALSE, message = FALSE}
+t100_raw  <-  read_delim("5year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+```
+```{r, include = FALSE, message = FALSE}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+```
+```{r Generate index variable for tsibble, include = FALSE, message = FALSE}
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything())-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, YEAR, MONTH, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+```
+
+The table below is a sample of the data after initial processing.
+
+```{r Generate tsibble, echo = FALSE}
+#Filter to see just the 3 Major Airlines: Delta American and United
+t100_ts_tbl %>%  filter(UNIQUE_CARRIER  %in% c("DL","AA","UA")) -> big3
+as_tsibble(big3, index = YRMO, key = UNIQUE_CARRIER) -> big3
+head(big3) #Print tsibble
+```
+
+Two time series plots below show the data for (1) Passengers transported and (2) Revenue Passenger Miles since January 2015. The dramatic drop in travel due to COVID-19 is quite obvious.
+
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+#Show total passengers trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly Passengers") + scale_y_continuous()
+
+#Show total Revenue Passenger Miles (RPM) trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly RPM")
+```
+
+**Formal Model of the Data Generating Process**
+**PRELIMINARY**
+
+As mentioned previously, the key to forecasting post-COVID travel numbers will be to consider only the historical data leading up to the 2020 rapid decrease. It is important to establish a "cut-off" point from which we will assume the travel industry experienced no impact from COVID-19. For this study, I consider that time to be December 31, 2019. The plots above appear to indicate normal seasonality in Passengers and RPM up until January 2020 and beyond.
+
+I consider the best representation of the data-generating process for Revenue Passenger Miles to be a Seasonal Autoregressive Integrated Moving Average model (Seasonal ARIMA). According to "Forecasting Principles and Practice (3rd ed), ARIMA models are "capable of modelling a wide range of seasonal data," which is what we can see at a glance in the airline data. This data is not stationary, has moderately strong seasonality and possibly a trend, therefore a seasonal ARIMA may fit better than a basic ARIMA. 
+
+The seasonal ARIMA model is formed by including additional seasonal terms with the other non-seasonal terms of a standard ARIMA model. Where ARIMA requires $(p,d,q)$, our airline forecast model must also include a seasonal component $(P,D,Q)_m$. Uppercase notation is used for the seasonal parts, which are multiplied by the non-seasonal terms.
+
+***Formal model will be revised after optimization***
+
+For example, an ARIMA$(1,1,1)(1,1,1)_4$ model (without a constant) is for quarterly data (m=4), and can be written as
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{4}) (1 - B) (1 - B^{4})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{4})\varepsilon_{t}$$
+
+
+**Discussion of the Statistical Model**
+*Describe how the formal statistical model captures and aligns with the narrative of the data-generating process.*
+
+
+**Plan for Data Analysis**
+
+I plan to utilize this model to create a forecasting tool. While it may be possible to describe a *rate* of recovery for the airlines, I aim to simply forecast the future operational capacity of our "Big 3" airlines given the assumption of a return to normal demand. This forecast would accurately capture the recent data of the past 5 years to provide a baseline goal towards which Delta, United, and American Airlines can strive.
+
+
+Through the analysis process, I may find out that there is a high variance, which may help the airlines assess their tolerance for risk in the coming months. I may see that there is a high probability of *not* meeting the goal (e.g. underperforming monthly or annually). 
+
+I expect to see some differences *between* the three major airlines; initial data exploration revealed that each airline may have a unique operational strategy that determines the length of their flight routes and number of times they fly each route. (The three airlines are not identically structured to begin with.) Full analysis may shed further light on these strategic choices. Again, the assumption is that the pandemic itself did not cause any of the Big 3 to change their corporate strategy in a dramatic way.
+
+This information will be gained by leveraging R for computation, and I will specifically start with the *fable* package and some sub-functions including ARIMA().
+
+I intend to decompose the historical data to see elements of interest, such as the ACF, for assessing the dynamic information in my time series. I will view the difference plots to help refine the model(s) and then check residuals.  If necessary, I can use a Ljung-Box test to confirm that the residuals are similar to white noise.  If there are multiple models, I will compare AICc or RMSE values to identify the best fit. Finally, I can evaluate the forecast with a test set. Ideally, I can then produce a plot that lays the forecast model onto the next 12 months to see what airlines could expect if travel demand picked up again.
+
+
+**References**
+Forecasting: Principles and Practice, 3rd Edition, Rob J Hyndman and George Athanasopoulos, Monash University, Australia
