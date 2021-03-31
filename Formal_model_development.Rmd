@@ -1,0 +1,676 @@
+---
+title: "SYS 5581 Project - Model Development"
+author: "Nick Coronato"
+date: "Version of `r Sys.Date()` | Due 2021-03-31"
+output: pdf_document
+---
+
+
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+library(googledrive)  #Used for reading CSV file from my Google Drive folder
+library(feasts)
+library(urca)
+
+options(scipen = 5)
+```
+Contents:
+
+SECTION I: The Data and Data-generating Process
+
+SECTION II: Exploratory Data Analysis
+
+SECTION III: Forecasting Model Development
+
+#***SECTION I: The Data and Data-generating Process.***
+
+Data was obtained from the BTS website: https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FIM
+or https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM
+
+This website allows the user to select key metrics of airline performance by market (domestic segment or international) and by year, along with several other filters. I extracted the raw data (2015-2020NOV) for the following features:
+
+1. Departures Scheduled [integer]
+2. Departures Performed [integer]
+3. Payload (pounds gross weight) [integer]
+4. Seats [integer]
+5. Passengers [integer]
+6. Distance (miles) [integer]
+7. Air Time (minutes) [integer]
+8. Unique Carrier (Airline identifier) [factor]
+9. Origin Airport ID (five digit code) [factor]
+10. Origin City Name [factor]
+11. Origin State Name [factor]
+12. Origin Country [factor]
+13. Destination Airport ID (five digit code) [factor]
+14. Destination City Name [factor]
+15. Destination State Name [factor]
+16. Aircraft Type [factor]
+17. Year
+18. Quarter
+19. Month
+
+  The data I downloaded is structured as 1,031,938 rows of a .csv file, with headers that indicate each of the columns (features) identified above. Each row entry, or observation, is a flight segment. A domestic flight segment is defined as any route that terminated in the United States or its territories; it could have originated anywhere.
+
+  Most route segments were executed multiple times throughout the time period, as indicated by the "Departures Performed" column. If multiple departures of the same segment were performed, the data is already captured in such a way that the other variables were updated; in other words, if two departures of a 100-passenger segment were conducted, then the corresponding "PASSENGERS" column indicates "200" for that segment. I did not have to multiply $(2 * 100)$ to manually calculate for repeat segments.
+  
+  I processed the raw data to fit the requirements of a tidy time series set. This required an aggregation of metrics at a *monthly* frequency. For example, all of the United Airlines segments during January 2015 were summed to form new features: Total Passengers, Total Air Time, etc. The time period of interest was January 2015 to November 2020. This produced 71 monthly observations for each of the "Big 3" airlines, which is a total of 213 data points for each metric. A monthly interpretation of historical travel data seemed most relevant and stable, as it appropriately highlights the seasonal trends of the year without being too granular.
+
+
+```{r Read CSV from Google Drive, include = FALSE}
+library("googledrive")
+(sharedrive <- drive_get("https://drive.google.com/file/d/1Z41tBkWTtdVNUJyfhLEVjeDn7f_CBI9x/view?usp=sharing"))
+
+# WARNING : this is a large file (about 118MB). The googledrive package should install this to your current working directory, and the following code chunk should be able to read it in to R. You may need to confirm your Google account token in the R console when running this particular chunk.
+
+#Step 1: Enter '0' in the console when prompted to select your token. 
+
+#Step 2. Your browser should auto-launch the google.drive login page. Choose your account, grant access to Rstudio, then copy the Code provided.
+
+# Step 3: Paste code into the console of Rstudio where prompted. Press enter.
+
+#R should give you a message to inform you where the file was downloaded on your local machine (your active directory.
+
+t100_raw <- drive_download(
+  "5year_t100_data.csv",
+  path = "5year_t100_data.csv",
+  overwrite = TRUE
+)
+```
+
+
+```{r Read in data, message = FALSE, include = FALSE}
+t100_raw  <-  read_delim("5year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+```
+
+
+**Organize the data into a *tidy* data frame.**
+
+Organize by taking out the non-useful variables. Make another new variable called RPM (revenue passenger miles), which is simply Passengers X Miles for each observation. Put the Index variable in the first column (eventually it will be 4dig year, 2dig month). Put the Key variables next (unique_carrier, Passengers, Distance, RPM). Then all the other (possibly) relevant variables.
+
+```{r Organize data into a tidy data frame, include = FALSE}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+```
+
+
+Make a new variable called YRMO that concatenates Year and Month into a YR-MO format. Make it a time series column.
+
+```{r Generate index variable for tsibble, message = FALSE, include = FALSE}
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything())-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, YEAR, MONTH, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+```
+
+
+The table below is a sample of the data after initial processing.
+
+```{r Generate tsibble, echo = FALSE}
+#Filter to see just the 3 Major Airlines: Delta American and United
+t100_ts_tbl %>%  filter(UNIQUE_CARRIER  %in% c("DL","AA","UA")) -> big3
+as_tsibble(big3, index = YRMO, key = UNIQUE_CARRIER) -> big3
+head(big3) #Print tsibble
+```
+
+
+
+#***SECTION II: Exploratory Data Analysis*** 
+
+
+*Briefly characterize the data set.*
+
+
+After extracting and transforming my data, I have a useful tibble with 204 observations. Each observation is a Monthly report of 9 variables. The time-series tibble called "big3" is the object I will be using for most analysis: it highlights the 3 U.S.-based  airline giants that could give useful information about passenger trends in the domestic market.
+
+I can view any of my trends for (Passengers, Seats, Miles Flown, Hours of Air Time) through ggplots like seen below.
+
+
+```{r, warning = FALSE, message = FALSE}
+#Show total passengers trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly Passengers") + scale_y_continuous()
+
+#Show total Revenue Passenger Miles (RPM) trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly RPM")
+```
+
+Interesting note: United Airlines produces a consistently lower TotalPax count. The red line is a similar shape to DL and UA, but shifted down by about 5 million passengers per month. However, I noticed that they are near the same level of production of Revenue Passenger Miles. This makes me think that United Airlines moves way fewer passengers, but possibly over longer domestic routes, therefore producing a comparable RPM value every month.
+
+So I checked the distance flown statistics across the airlines.
+
+```{r}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black")
+```
+
+Yes, there seems to be evidence that the 3 airlines under investigation do have different strategies in terms of route lengths/distance flown in this data set. This could be a function of their actual corporate strategy, or just the nature of their "hub" locations, or even totally random. The chart below breaks it out by year and shows that United Airlines seems to fly longest distance routes (on average), American Airlines flies the shortest routes, and Delta's flight distance distribution is widely spread. Interesting stuff; maybe useful.
+
+```{r}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black") +
+  facet_grid(YEAR ~ .)
+```
+
+```{r}
+ggplot(big3, aes(x = TotalRPM, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black") +
+  facet_grid(YEAR ~ .)
+```
+
+```{r}
+#Seasonal plot
+big3 %>%
+  feasts::gg_season(TotalPax, labels = "both") + ylab("Total Passengers per Month")
+```
+
+
+The Seasonal Plot above shows a pretty clear representation of the seasonal trends in air travel amongst these three airlines. (Note: Y-axis is not consistent; adjusted for each airline). 
+
+Prior to 2020, the most popular year for air travel was 2018 (according to most metrics of interest here).
+
+Seasonal trends are somewhat as one would expect for air travel. We can see that February and September are the low points for passengers being transported, and the summer and holiday months create a spike for these 3 airlines.
+
+There was an interesting phenomenon for American Airlines in summer 2015, where their Total Passenger count increased greatly. This could be due to general corporate expansion, acquisition of new (or bigger) airplanes, or initiation of new flight routes. 
+
+(A little research showed that AA did place "the 'largest aircraft order in history' in July 2011, purchasing 460 'next generation' Boeing 737 and Airbus A320 aircraft for delivery between 2013 and 2022. Also, 2015 was the year they completed a merger with US Airways: On April 8, 2015, the Federal Aviation Administration awarded American Airlines and US Airways a single operating certificate." At some point in 2015, I'm assuming the Transportation Bureau started counting the former-US Airways flights as part of American Airlines, and it was probably during the June or July timeframe.)
+
+[https://en.wikipedia.org/wiki/History_of_American_Airlines] 
+
+
+I was interested to see what happened with the other metrics for AA during summer 2015.
+
+
+The first chart depicts "Total Distance flown" per month during 2015.
+
+The second chart depicts "Total air time flown" per month during 2015.
+
+
+```{r}
+big3 %>% 
+  filter(UNIQUE_CARRIER == "AA") %>% 
+  feasts::gg_season(TotalDistance, labels = "both") + ylab("Total Distance Flown per Month")
+
+big3 %>% 
+  filter(UNIQUE_CARRIER == "AA") %>% 
+  feasts::gg_season(TotalAIR_TIME, labels = "both") + ylab("Total Air_time per Month")
+```
+
+
+Sure enough, American Airlines experienced a huge jump in summer '15, to where Distance and Air Time flown became consistent with 2016-2019 levels. This leads me to believe that 2015 was a year in which external factors were at play -- important to note but probably will not play into my analysis any further.
+
+More directly to the questions I'm trying to answer:
+
+Another aspect of these gg_season plots that I see is the stabilization of Passengers flown as the year 2020 proceeded. The latest data in this set is from November 2020. We can see below how each airline performed through November 2020. Their monthly passenger numbers were essentially cut to near 500,000 by April 2020, and as of November they did climb back towards 5 million ( with American Airlines moving the most pax). This is roughly half the pre-COVID19 passenger count for these airlines. The question we can address is how long it may take to recover to pre-COVID19 numbers.
+
+```{r}
+#Show total passengers trend since 2020 Jan
+filter(big3, YEAR == "2020") -> big32020
+big32020 %>% 
+  ggplot(mapping = aes(x = MONTH, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many PASSENGERS did the Big 3 carry in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+```
+
+
+This one shows a similar story, in terms of Distance Flown over 2020.
+
+
+```{r}
+big32020 %>% 
+  ggplot(mapping = aes(x = MONTH, y = TotalDistance, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("How many MILES did the Big 3 fly in COVID2020?") + scale_y_continuous(minor_breaks = waiver()) + scale_x_continuous(n.breaks = 12)
+```
+
+
+I also wanted to plot some possibly related variables in a scatter plot, to see if there was anything to discover.
+
+Below is Air Time (hours spent in flight for the month) vs. Distance Flown (miles). Of course, as distance flown increases, we expect to see an increase in air time, but is it linear?
+
+
+```{r}
+#Is there a relationship between Total Air_Time and Distance Flown?
+big3 %>% 
+  ggplot(aes(x = TotalDistance, y = TotalAIR_TIME))+
+  geom_point(size=1, aes(colour = UNIQUE_CARRIER), alpha =0.5)+
+  labs(y = "Total Air Time (hours)", x = "Total Distance Flown (Miles)")
+```
+```{r}
+timedistancemodel <- lm(TotalAIR_TIME ~ TotalDistance, data = big3)
+summary(timedistancemodel)
+```
+
+
+```{r, echo = FALSE, message = FALSE}
+big3 %>% 
+  GGally::ggpairs(columns = 5:9)
+```
+
+The Ggally relationship plots above show correlation amongst features. Highly linear relationships seem to exist between many of these.
+
+
+
+
+
+#***SECTION III: FORMAL MODEL DEVELOPMENT***
+
+
+After careful consideration, I decided to attempt a model of each airline's Revenue Passenger Miles over time using an Autoregressive Integrated Moving Average (model) with seasonal and non-seasonal components. The procedures outlined below describe the process for model generation.
+
+
+**Modeling procedure** borrowed from *Forecasting Principles and Practice, 3rd edition.*
+
+When fitting an ARIMA model to a set of time series data, the following procedure provides a useful general approach.
+
+*1. Plot the data and identify any unusual observations.*
+
+We did most of this in the exploratory data analysis above, but I wanted to take a look at a few more informative plots for ARIMA model generation.
+
+Plot the lag plots. This helps us look for possible seasonality. There seems to be strong positive relationship in lag 1, indicating potential seasonality. For the other lag plots, it's hard to see a pattern.
+
+```{r}
+big3 %>% 
+  group_by(YEAR, UNIQUE_CARRIER) %>%  
+  filter(UNIQUE_CARRIER == "UA") %>% 
+  gg_lag(TotalRPM, geom = "point")
+```
+
+
+
+Plot the ACFs and PACFs for TotalRPM.
+
+If one or more large spikes are outside these bounds, or if substantially more than 5% of spikes are outside these bounds, then the series is probably not white noise.
+
+```{r, message = FALSE,echo = FALSE}
+preCovid <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER %in% c("UA",'DL','AA')) %>% 
+  filter(YEAR < 2020) %>%
+  select(YRMO, TotalRPM)
+preCovid
+
+preCovid %>% ACF(TotalRPM, lag_max = 12)
+preCovid %>% 
+  ACF(TotalRPM) %>% 
+  autoplot()
+preCovid %>% 
+  PACF(TotalRPM) %>% 
+  autoplot()
+
+autoplot(preCovid, TotalRPM) +
+  labs(title="Travel 2015-2020",
+       y="Total Revenue Passenger Miles")
+```
+
+
+
+*2. If necessary, transform the data (using a Box-Cox transformation) to stabilise the variance.*
+
+  Here I split the project: in order to provide adequate analysis, I decided to formulate 3 separate models with the same structure. Each airline's forecast will be best predicted if optimizing the parameters based on that particular carrier's historical data. Each airline carrier has its own model:
+  
+  a. UAtravel is modeled with 'fitUA'
+  
+  b. DLtravel is modeled with 'fitDL'
+  
+  c. AAtravel is modeled with 'fitAA'
+  
+  NOTE: For American Airlines *only*, I excluded 2015 data altogether. As noted in my exploratory data analysis, 2015 seemed to be an anomaly year with an unprecedented RPM increase, likely attributed to corporate re-structuring and acquisition of another airline's assets. So AAtravel models are built from the 48 months between 2016JAN and 2019DEC. The final AA model ended up being quite good when the 2015 data was discounted.
+
+
+```{r, message = FALSE}
+#create a UAtravel subset, which is United Airlines pre-2020
+UAtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="UA") %>%
+  ungroup() 
+  # select(TotalRPM, YRMO) 
+
+#create a DLtravel subset, which is Delta Airlines pre-2020
+DLtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="DL") 
+  # select(YEAR, MONTH, TotalRPM, -YRMO)
+
+#create a AAtravel subset, which is American Airlines Jan2016-Dec2019
+
+#NOTE: For UA only, I excluded 2015 altogether, as it seemed to be an anomaly year with an unprecedented RPM increase, likely attributed to corporate re-structuring and acquisition of another airline's assets. So AAtravel models are built from the 48 months between 2016JAN and 2019DEC. This model ended up being quite good when the 2015 data was discounted.
+
+AAtravel <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER =='AA') %>% 
+  filter(YEAR < 2020) %>%
+  filter(YEAR > 2015) %>% 
+  select(YRMO, TotalRPM) %>% 
+  ungroup()
+
+
+```
+
+
+*Data transformation* - Box Cox - Using Guerrero features search for lambda values. The goal is to make the size of seasonal variation about the same across time series. Once we transform the data, we can look at the first-difference and second-difference to help determine what value of parameters to use for (p,d,q) and (P,D,Q).
+
+```{r}
+#extract the best lambda using guerrero features
+(lambdaUA <- UAtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero))
+
+(lambdaDL <- DLtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero))
+
+(lambdaAA <- AAtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero))
+
+
+#alternate way to automatically extract optimal Lambda:
+EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->UAboxcox
+EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->DLboxcox
+EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->AAboxcox
+
+# transform the data: new preCovid data sets are UAtransform, DLtransform, AAtransform
+UAtransform <- bind_cols(UAtravel, UAboxcox)
+#print(EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE))  
+
+DLtransform <- bind_cols(DLtravel, DLboxcox)
+#print(EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE))
+
+AAtransform <- bind_cols(AAtravel, AAboxcox)
+#print(EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE))
+
+#plot box_cox for UA
+UAtravel %>% 
+  autoplot(box_cox(TotalRPM, .960425)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaUA$ = ",
+         round(.960425,3))))
+
+#plot box_cox for DL
+DLtravel %>%
+  autoplot(box_cox(TotalRPM,  0.131388)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaDL$ = ",
+         round( 0.131388,3))))
+
+#plot box_cox for AA
+AAtravel %>%
+  autoplot(box_cox(TotalRPM, 1.391173)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaAA$ = ",
+         round(1.391173,3))))
+```
+
+
+Use feat_acf to get a summary of the autocorrelation features in our preCovid data
+
+```{r}
+UAtransform %>% features(TotalRPM, feat_acf)
+DLtransform %>% features(TotalRPM, feat_acf)
+AAtransform %>% features(TotalRPM, feat_acf)
+```
+
+Use feat_stl to compute STL-based features of each airline's historical series.
+
+```{r}
+UAtransform %>% features(TotalRPM, feat_stl) -> UAstl
+UAstl
+DLtransform %>% features(TotalRPM, feat_stl) -> DLstl
+DLstl
+AAtransform %>% features(TotalRPM, feat_stl) -> AAstl
+AAstl
+```
+
+
+*feat_spectral will compute the (Shannon) spectral entropy* of a time series, which is a measure of how easy the series is to forecast. A series which has strong trend and seasonality (and so is easy to forecast) will have entropy close to 0. A series that is very noisy (and so is difficult to forecast) will have entropy close to 1.
+As seen below, the noisiest series is United Airlines, but they are all <0.55 and thus we continue with the modeling with this in mind.
+
+```{r}
+feat_spectral(UAtransform$TotalRPM, 12)
+feat_spectral(DLtransform$TotalRPM, 12)
+feat_spectral(AAtransform$TotalRPM, 12)
+```
+
+
+*3. If the data are non-stationary, take first differences of the data until the data are stationary.*
+
+The data for all three airlines appears non-stationary, with an overall decline.
+
+Below is a **United Airlines** Difference plot. 
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12),
+               plot_type='partial') + labs(title="UA Seasonally differenced", y="")
+```
+
+
+
+There is still clearly non-stationarity, so we take a further first difference.
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12) %>%  difference(), 
+               plot_type='partial') + labs(title="UA Double differenced", y="")
+```
+
+Now we have a double-differenced ACF and PACF from which to generate our ARIMA model. 
+
+
+
+Below is a **Delta Airlines** Difference plot. 
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+DLtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12), 
+               plot_type='partial') + labs(title="Seasonally differenced", y="")
+```
+
+Non-stationarity is still observed, so we proceed with the double-differencing.
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+DLtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12) %>%  difference(), 
+               plot_type='partial') + labs(title="DL Double differenced", y="")
+```
+
+
+
+Below is an **American Airlines** Difference plot.
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+AAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12), 
+               plot_type='partial') + labs(title="AASeasonally differenced", y="")
+```
+
+Non-stationarity is still observed, so we proceed with the double-differencing.
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+AAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12) %>%  difference(), 
+               plot_type='partial') + labs(title="AA Double differenced", y="")
+```
+
+
+
+4. Examine the ACF/PACF: Which model coefficients/type is most appropriate?
+
+*UAtravel*: For United Airlines, we have a significant ACF spike at lag 1, suggesting a non-seasonal MA(1) component. The PACF shows a significant relationship at lag 8 as well, but none beyond lag 8. Altogether, these indicate an $ARIMA(1,1,0)(8,2,0)_{12}$ model. 
+
+*DLtravel*: After double differencing: Analysis of these ACF and PCF plots indicates an appropriate ARIMA model may be $ARIMA(12,2,0)(1,2,0)_{12}$
+
+*AAtravel*: After double-differencing, now the data is generally stationary around 0. Analysis of these ACF and PCF plots indicates an appropriate ARIMA model may be $ARIMA(4,2,0)(5,2,0)_{12}$
+
+
+With these potential model parameters in mind, I proceeded to test them against the automatic ARIMA models in the *fable* package. The result is shown below. Ultimately, *fable* decided that the automatically generated models were better than my proposed models. Optimal model parameters are indicated in the tables. For forecasting, I used the models formulated by *fable* instead of the ARIMA models I proposed above.
+
+
+```{r, message = FALSE, warning = FALSE}
+#Let's try to auto build a model
+
+# When we do the auto ARIMA functions, the data transformations are done automatically. So we will call UAtravel instead of UAtransform into the modeling function.
+fitUA <- UAtravel %>% 
+  model(
+    ARIMA110820 = ARIMA(TotalRPM ~ pdq(1,0,0) + PDQ(8,0,0)),
+    UAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    UAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitDL <- DLtravel %>% 
+  model(
+    ARIMA1220120 = ARIMA(TotalRPM ~ pdq(12,0,0) + PDQ(1,0,0)),
+    DLauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    DLstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitAA <- AAtravel %>% 
+  model(
+    ARIMA420520 = ARIMA(TotalRPM ~ pdq(4,2,0) + PDQ(5,2,0)),
+    AAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    AAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+```
+
+**United Airlines model:**
+```{r}
+glance(fitUA)
+broom::tidy(fitUA) #model coefficients
+```
+
+**Delta Airlines model:**
+```{r}
+glance(fitDL)
+broom::tidy(fitDL) #model coefficients
+```
+
+**American Airlines model:**
+```{r}
+glance(fitAA)
+broom::tidy(fitAA) #model coefficients
+```
+
+
+5. Try your chosen model(s), and use the AICc to search for a better model.
+
+
+So the models that minimize estimated information loss (lowest AICc):
+
+**United: UAauto**
+
+fitUA Model formulation:
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi =  0.9481228$     
+  
+  [MA(1) component] $\Theta = -0.4742058$ 
+
+
+**Delta: DLauto**
+
+fitDL Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [MA(1) component] $\Theta = -0.7399767$ 
+
+
+**American: AAauto**
+
+fitAA Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi{1} =  -0.8590480$ 
+  
+  [AR(2) component] $\phi_{2} =  -0.5542507$ 
+  
+  [seasonal AR(1) component] $\Phi_{1} = -0.6003123$ 
+
+
+*6. Check the residuals from your chosen model by plotting the ACF of the residuals, and doing a portmanteau test of the residuals. If they do not look like white noise, try a modified model.*
+
+Look at the residuals
+```{r}
+fitUA %>% select(UAauto) %>% 
+  gg_tsresiduals()
+
+fitDL %>% select(DLauto) %>% 
+  gg_tsresiduals()
+
+fitAA %>% select(AAauto) %>% 
+  gg_tsresiduals()
+```
+
+
+Use a Ljung-Box test to confirm that the residuals are consistent with white noise. The large p-values shown below indicate that our seasonal ARIMA models have all passed the checks and are ready for forecasting.
+
+```{r}
+augment(fitUA) %>% features(.innov, ljung_box, lag=24, dof=4)
+augment(fitDL) %>% features(.innov, ljung_box, lag=24, dof=4)
+augment(fitAA) %>% features(.innov, ljung_box, lag=24, dof=4)
+```
+
+
+*7. Once the residuals look like white noise, calculate forecasts.*
+
+
+```{r}
+forecast(fitUA, h=36) %>%
+  filter(.model=='UAauto') %>%
+  autoplot(UAtravel) +
+  labs(title = "Forecasted United Airlines Revenue Passenger Miles",
+       y="RPMs")
+
+forecast(fitDL, h=36) %>%
+  filter(.model=='DLauto') %>%
+  autoplot(DLtravel) +
+  labs(title = "Forecasted Delta Airlines Revenue Passenger Miles",
+       y="RPMs")
+
+forecast(fitAA, h=36) %>%
+  filter(.model=='AAauto') %>%
+  autoplot(AAtravel) +
+  labs(title = "Forecasted American Airlines Revenue Passenger Miles",
+       y="RPMs")
+```
+
+
