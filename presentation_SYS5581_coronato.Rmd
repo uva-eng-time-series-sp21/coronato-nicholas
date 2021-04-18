@@ -1,0 +1,687 @@
+---
+title: "US Passenger Airline Post-Pandemic Recovery"
+subtitle: "A Time Series Analysis"
+author: "Nick Coronato"
+institute: University of Virginia
+date: "4/17/2021"
+output:
+  beamer_presentation:
+    theme: "Boadilla"
+    colortheme: "seahorse"
+    fonttheme: "professionalfonts"
+    toc: True
+    fig_height: 4
+    slide_level: 3
+---
+
+# Background
+
+### Concept: to analyze historical data from 2015-2020 in order to understand passenger trends in commercial aviation.
+
+The COVID-19 pandemic brought leisure and business air travel to a near-screeching halt in the second quarter of calendar year 2020. 
+
+Experts propose that a full recovery could take upwards of 2.5 years. 
+
+In this research, I aim to provide insight on the forecast for recovery amongst three leading US airline carriers in the post-COVID-19 environment:
+
+1. United Airlines (UA)
+
+2. Delta Airlines (DL)
+
+3. American Airlines (AA)
+
+Data is open source and provided by the US Bureau of Transportation Statistics (BTS). 
+
+### Metrics
+
+**Revenue Passenger Miles (RPM)**, a key indicator of an airline's operational load, can be modeled as a time series. 
+
+ $$Revenue Passenger Miles (RPM) = $$
+ 
+ $$Number of Paying Passengers * Distance Traveled$$
+
+
+## The Problem Statement
+### Problem
+
+  ***How should we expect the largest US passenger airlines to operate in the aftermath of COVID-19?***
+  
+  This particular question is important because it seeks to provide predictive insight to how the US airline giants will be expected to operate if the travel demand resumes in 2021 or 2022. 
+  
+  If they can predict this, the airlines should be able to strategically ramp up and meet the demand. 
+  
+  If they do not forecast appropriately, they may fail, and the second- and third-order effects will be global.
+  
+My model will use recent historical data to identify Revenue Passenger Mile trends right up to the COVID-19 onset, and then forecast the expected output (RPM) of UA, DL, and AA if normal travel resumes.
+
+# The Data
+
+Data for this research is downloaded from the BTS website:
+
+-https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM
+
+
+-Analysis is specific to *"domestic segments"*; flights that terminated in the US or its territories.
+
+-Metrics aggregated at a **monthly** frequency. 
+
+-The time period of interest was **January 2015 to November 2020**. 
+
+-This produced **71 monthly observations** for each of the "Big 3" airlines, which is a total of 213 data points for each metric. 
+
+
+A monthly interpretation of historical travel data appropriately highlights the seasonal trends of the year without being too granular.
+
+---
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+library(googledrive)  #Used for reading CSV file from my Google Drive folder
+library(knitr)
+library(kableExtra)
+library(feasts)
+
+options(scipen = 5)
+# options(knitr.table.format = "latex")
+options(tinytex.verbose = TRUE)
+```
+```{r, include = FALSE}
+.onLoad <- function(libname = find.package("kableExtra"), pkgname = "kableExtra") {
+  if (knitr::is_latex_output()) {
+    load_packages <- getOption("kableExtra.latex.load_packages", default = TRUE)
+    if (load_packages) {
+      usepackage_latex("booktabs")
+      usepackage_latex("longtable")
+      usepackage_latex("array")
+      usepackage_latex("multirow")
+      usepackage_latex("wrapfig")
+      usepackage_latex("float")
+      usepackage_latex("colortbl")
+      usepackage_latex("pdflscape")
+      usepackage_latex("tabu")
+      usepackage_latex("threeparttable")
+      usepackage_latex("threeparttablex")
+      usepackage_latex("ulem", "normalem")
+      usepackage_latex("makecell")
+      # usepackage_latex("xcolor")
+    }
+  }
+  auto_format <- getOption("kableExtra.auto_format", default = TRUE)
+  if (auto_format) auto_set_format()
+  if (!is.null(rmarkdown::metadata$output) &&
+      rmarkdown::metadata$output %in% c(
+        "ioslides_presentation", "slidy_presentation",
+        "gitbook", "bookdown::gitbook", "radix_article", "radix::radix_article",
+        "distill_article", "distill::distill_article"
+      )) {
+    options(kableExtra.html.bsTable = TRUE)
+  }
+  if (!is.null(knitr::opts_knit$get("rmarkdown.pandoc.to")) &&
+      knitr::opts_knit$get("rmarkdown.pandoc.to") %in% c("epub3", "epub")) {
+    options(kableExtra.knit_print.dependency = FALSE)
+  }
+}
+```
+
+```{r Read in data, include = FALSE, message = FALSE, cache = TRUE}
+t100_raw  <-  read_delim("5year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+```
+```{r, include = FALSE, message = FALSE, cache = TRUE}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+```
+```{r Generate index variable for tsibble, include = FALSE, message = FALSE, cache = TRUE}
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything())-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, YEAR, MONTH, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+```
+
+
+```{r Generate tsibble, echo = FALSE, cache = TRUE}
+#Filter to see just the 3 Major Airlines: Delta American and United
+
+t100_ts_tbl %>%  filter(UNIQUE_CARRIER  %in% c("DL","AA","UA")) -> big3
+as_tsibble(big3, index = YRMO, key = UNIQUE_CARRIER) -> big3
+# big3.kable <- kable(big3[1:6,1:9]) %>% kable_styling(full_width=TRUE)
+# 
+# big3.kable #Print tsibble
+```
+
+
+### Historical Data Exploration
+
+2015-2020: Effects of COVID-19
+
+Monthly RPM
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#Show total Revenue Passenger Miles (RPM) trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly RPM")
+```
+
+### Historical Data Exploration
+
+2015-2020: Effects of COVID-19
+
+Monthly Passengers
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#Show total passengers trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly Passengers") + scale_y_continuous()
+```
+
+### Revealing each airline's strategy
+```{r, echo = FALSE}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black")
+```
+
+### Seasonal Plots
+```{r, echo = FALSE}
+big3 %>%
+  feasts::gg_season(TotalPax, labels = "both") + ylab("Total Passengers per Month")
+```
+
+### 2015 - A Weird Year for American Airlines
+
+There was an interesting phenomenon for American Airlines in summer 2015, where their Total Passenger count increased greatly. 
+
+```{r, echo = FALSE}
+ggplot(data = filter(big3, UNIQUE_CARRIER == "AA"), mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("American Airlines RPM 2015-2020")
+```
+
+After some research into the cause of this spike, I decided to remove 2015 observations from the American Airlines data set.
+
+
+### Model Assumptions & Limitations
+
+1. Assume that the "Big 3" airlines can show trends that are representative of the entire US passenger airline industry
+
+2. Assume that RPM is indeed the proper metric to measure operational capacity of a particular carrier
+
+3. Assume that data from 2015 - 2019 is sufficient for modeling (48 monthly observations)
+
+4. **Assume that changes in external forces do not hold a significant bearing on RPM**
+
+  - Strategic corporate decisions
+
+  - Passenger preferences
+
+# Forecast Model for Airline Recovery
+
+## Choosing a Model
+
+### ARIMA
+
+-Revenue Passenger Miles over time is modeled using an Autoregressive Integrated Moving Average (ARIMA model) with seasonal and non-seasonal components. 
+
+-***Each airline gets its own model***
+
+-To generate models, only include observed RPM through December 2019, *prior to any effects from COVID-19*
+
+
+
+Modeling procedure borrowed from *Forecasting Principles and Practice, 3rd edition.*
+
+
+### Autocorrelation Features
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+preCovid <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER %in% c("UA",'DL','AA')) %>% 
+  filter(YEAR < 2020) %>%
+  select(YRMO, TotalRPM)
+
+
+preCovid %>% 
+  ACF(TotalRPM) %>% 
+  autoplot(xlab = "Lag [1 month]", title="ACF charts: Revenue Passenger Miles")
+```
+
+```{r, message = FALSE, echo = FALSE}
+#create a UAtravel subset, which is United Airlines pre-2020
+UAtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="UA") %>%
+  ungroup() 
+  # select(TotalRPM, YRMO) 
+
+#create a DLtravel subset, which is Delta Airlines pre-2020
+DLtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="DL") 
+  # select(YEAR, MONTH, TotalRPM, -YRMO)
+
+#create a AAtravel subset, which is American Airlines Jan2016-Dec2019
+
+#NOTE: For UA only, I excluded 2015 altogether, as it seemed to be an anomaly year with an unprecedented RPM increase, likely attributed to corporate re-structuring and acquisition of another airline's assets. So AAtravel models are built from the 48 months between 2016JAN and 2019DEC. This model ended up being quite good when the 2015 data was discounted.
+
+AAtravel <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER =='AA') %>% 
+  filter(YEAR < 2020) %>%
+  filter(YEAR > 2015) %>% 
+  select(YRMO, TotalRPM) %>% 
+  ungroup()
+```
+
+### Box-Cox Transformation
+
+
+Guerrero features search was used to find the optimal lambda values (to be used in Box Cox transformation). 
+
+The goal is **to make the size of seasonal variation about the same across time series**.
+
+Once we transform the data, we can look at the first-difference and second-difference to help determine which values to use for parameters (p,d,q) and (P,D,Q).
+
+### UA Transformed
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+#extract the best lambda using guerrero features
+lambdaUA <- UAtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+lambdaDL <- DLtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+lambdaAA <- AAtravel %>%
+  features(TotalRPM, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#alternate way to automatically extract optimal Lambda:
+EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->UAboxcox
+EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->DLboxcox
+EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->AAboxcox
+
+# transform the data: new preCovid data sets are UAtransform, DLtransform, AAtransform
+UAtransform <- bind_cols(UAtravel, UAboxcox)
+#print(EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE)) 
+
+#plot box_cox for UA
+UAtravel %>% 
+  autoplot(box_cox(TotalRPM, .960425)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaUA$ = ",
+         round(.960425,3))))
+```
+
+
+### DL Transformed
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+#plot box_cox for DL
+DLtravel %>%
+  autoplot(box_cox(TotalRPM,  0.131388)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaDL$ = ",
+         round( 0.131388,3))))
+```
+
+
+### AA Transformed
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+#plot box_cox for AA
+AAtravel %>%
+  autoplot(box_cox(TotalRPM, 1.391173)) +
+  labs(y = "",
+       title = latex2exp::TeX(paste0(
+         "Transformed TotalRPM with $\\lambdaAA$ = ",
+         round(1.391173,3))))
+```
+
+### Spectral Entropy
+
+*feat_spectral will compute the (Shannon) spectral entropy* of a time series
+
+- a measure of *noise* in our transformed data. 
+
+- A series which has strong trend and **seasonality**, entropy **close to 0**. (easier to forecast)
+
+- A series that is very **noisy**, entropy **close to 1**. (difficult to forecast)
+
+As seen below, the noisiest series is United Airlines, but they are all <0.55 and thus we continue modeling with this in mind.
+
+```{r, echo=FALSE}
+# transform the data: new preCovid data sets are UAtransform, DLtransform, AAtransform
+UAtransform <- bind_cols(UAtravel, UAboxcox)
+#print(EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE))  
+
+DLtransform <- bind_cols(DLtravel, DLboxcox)
+#print(EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE))
+
+AAtransform <- bind_cols(AAtravel, AAboxcox)
+#print(EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE))
+
+kable(
+  (tibble("UA entropy" = feat_spectral(UAtransform$TotalRPM, 12),"DL entropy" = feat_spectral(DLtransform$TotalRPM, 12), "AA entropy" = feat_spectral(AAtransform$TotalRPM, 12)))
+)
+
+```
+
+### Stationarity
+
+If the data are non-stationary, take first differences of the data until the data are stationary.
+
+The data for all three airlines appears non-stationary, with an overall decline.
+
+---
+
+Below is a **United Airlines** Difference plot. 
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12),
+               plot_type='partial') + labs(title="UA Seasonally differenced", y="")
+```
+
+
+There is still clearly non-stationarity, so we take a further first difference.
+
+### UA difference plot (second difference)
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12) %>%  difference(), 
+               plot_type='partial') + labs(title="UA Double differenced", y="")
+```
+
+**Now** we have a double-differenced ACF and PACF from which to generate our ARIMA model.
+
+Repeat the process for the other 2 airlines to estimate ARIMA parameters.
+
+## feasts::ARIMA()
+
+Using the *ARIMA* function in the *feasts* package, I generated three variations of ARIMA model for *each* airline:
+
+1. ARIMA with user-defined parameters *p, d, q, P, D, Q* (based on visual assessment of ACF/PACF)
+
+2. ARIMA with stepwise = FALSE, approx = FALSE for the full search
+
+3. ARIMA with stepwise = TRUE for the quicker search
+
+*Feasts* automatically generated the best models, by minimum AICc:
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+fitUA <- UAtravel %>% 
+  model(
+    ARIMA110820 = ARIMA(TotalRPM ~ pdq(1,0,0) + PDQ(8,0,0)),
+    UAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    UAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitDL <- DLtravel %>% 
+  model(
+    ARIMA1220120 = ARIMA(TotalRPM ~ pdq(12,0,0) + PDQ(1,0,0)),
+    DLauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    DLstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitAA <- AAtravel %>% 
+  model(
+    ARIMA420520 = ARIMA(TotalRPM ~ pdq(4,2,0) + PDQ(5,2,0)),
+    AAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    AAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+```
+
+**United Airlines model:**
+```{r, echo = FALSE}
+# glance(fitUA)
+kable(
+  broom::tidy(fitUA) #model coefficients
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+```
+---
+
+**Delta Airlines model:**
+```{r, echo = FALSE}
+# glance(fitDL)
+kable(
+  broom::tidy(fitDL) #model coefficients
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+```
+
+**American Airlines model:**
+```{r, echo = FALSE}
+# glance(fitAA)
+kable(
+  broom::tidy(fitAA) #model coefficients
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+```
+
+### Best models formulated
+
+The models that minimize estimated information loss (lowest AICc):
+
+**United: UAauto**
+
+fitUA Model formulation:
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi =  0.9481228$     
+  
+  [MA(1) component] $\Theta = -0.4742058$ 
+
+---
+
+**Delta: DLauto**
+
+fitDL Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [MA(1) component] $\Theta = -0.7399767$ 
+
+---
+
+**American: AAauto**
+
+fitAA Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi{1} =  -0.8590480$ 
+  
+  [AR(2) component] $\phi_{2} =  -0.5542507$ 
+  
+  [seasonal AR(1) component] $\Phi_{1} = -0.6003123$ 
+
+
+
+## Checking Residuals: **United**
+
+
+```{r, echo = FALSE}
+fitUA %>% select(UAauto) %>% 
+  gg_tsresiduals()
+
+```
+
+## Checking Residuals: **Delta**
+
+```{r, echo = FALSE}
+fitDL %>% select(DLauto) %>% 
+  gg_tsresiduals()
+```
+
+## Checking Residuals: **American**
+
+```{r, echo = FALSE}
+fitAA %>% select(AAauto) %>% 
+  gg_tsresiduals()
+```
+
+### Ljung-Box test
+
+Use a Ljung-Box test to confirm that the residuals are consistent with white noise. 
+
+The large p-values shown below indicate that our seasonal ARIMA models have all passed the checks and are ready for forecasting.
+
+```{r, echo = FALSE}
+ljungUA <- augment(fitUA) %>% features(.innov, ljung_box, lag=24, dof=4) 
+kable(ljungUA) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+ljungDL <- augment(fitDL) %>% features(.innov, ljung_box, lag=24, dof=4)
+kable(ljungDL) %>%  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+ljungAA <- augment(fitAA) %>% features(.innov, ljung_box, lag=24, dof=4)
+kable(ljungAA) %>%  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 7)
+```
+
+## The Forecast: 2021 and beyond
+
+Once the residuals look like white noise, calculate forecasts.
+
+**United Airlines**
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitUA, h=36) %>%
+  filter(.model=='UAauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted United Airlines Revenue Passenger Miles",
+       y="RPMs")
+```
+
+---
+
+**Delta Airlines**
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitDL, h=36) %>%
+  filter(.model=='DLauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted Delta Airlines Revenue Passenger Miles",
+       y="RPMs")
+```
+
+---
+
+**American Airlines**
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitAA, h=36) %>%
+  filter(.model=='AAauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted American Airlines Revenue Passenger Miles",
+       y="RPMs")
+```
+
+```{r, echo = FALSE}
+UAforecast <- forecast(fitUA, h=36) %>%
+  filter(.model=='UAauto')
+UAforecast2020 <- forecast(fitUA, h=11) %>%
+  filter(.model=='UAauto')
+
+DLforecast <- forecast(fitDL, h=36) %>%
+  filter(.model=='DLauto')
+DLforecast2020 <- forecast(fitDL, h=11) %>%
+  filter(.model=='DLauto')
+
+AAforecast <- forecast(fitAA, h=36) %>%
+  filter(.model=='AAauto')
+AAforecast2020 <- forecast(fitAA, h=11) %>%
+  filter(.model=='AAauto')
+```
+
+
+  
+# Conclusions
+
+### Interesting Notes
+
+Since we have 2020 data, we can calculated "Losses" experienced by each airline with simple subtraction.
+
+$$Loss = mean forecast for 2020 - actual RPM in 2020$$
+
+```{r, echo = FALSE, message = FALSE}
+#How much did they lose each month of 2020?
+UAlosses <- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "UA")
+UAlosses <- bind_cols(UAforecast2020, UAlosses) %>% mutate(loss = (.mean-TotalRPM...11))
+UAlosses <- UAlosses[,c(5,6,7,8,9,11,15)]
+DLlosses<- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "DL")
+DLlosses <- bind_cols(DLforecast2020, DLlosses)%>% mutate(loss = (.mean-TotalRPM...11))
+DLlosses <- DLlosses[,c(5,6,7,8,9,11,15)]
+AAlosses<- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "AA")
+AAlosses <- bind_cols(AAforecast2020, AAlosses)%>% mutate(loss = (.mean-TotalRPM...11))
+AAlosses <- AAlosses[,c(5,6,7,8,9,11,15)]
+names(UAlosses)[1] <- "Expected"
+names(DLlosses)[1] <- "Expected"
+names(AAlosses)[1] <- "Expected"
+names(UAlosses)[6] <- "Actual"
+names(DLlosses)[6] <- "Actual"
+names(AAlosses)[6] <- "Actual"
+```
+```{r, echo = FALSE}
+kable(
+  tibble("United 2020 Losses" = sum(UAlosses$loss), "Delta 2020 Losses" = sum(DLlosses$loss), "American 2020 Losses" = sum(AAlosses$loss))
+)
+```
+
+### How many Revenue Passenger Miles were lost per month in 2020?
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+combinedlosses <- bind_rows(UAlosses,DLlosses,AAlosses)
+
+ggplot(data = combinedlosses, aes(x=YRMO, y = loss, fill = UNIQUE_CARRIER)) + geom_bar(stat = "identity",position=position_dodge()) + ggtitle("Monthly 2020 Losses") 
+```
+
+case in point: Delta airlines lost 11.4 billion RPMs in July 2020... that's ***nearly 83% lost from the forecast!***
+
+### How can we measure the recovery?
+
+Some thoughts:
+
+- How long will it take the Big 3 to reach their pre-COVID levels? summer peak?
+
+- How long will it take them to recoup the losses we just visualized?
+
+- Since "Revenue Passenger Miles" are a function of dollars and passengers... can we affect dollars collected without increasing passenger counts?
+
+- What changes in strategy could we recommend to these airlines to help them cope? (Think back to the different route/mile strategies we discussed)
+
+- How long can they survive if passenger airline trends do not return to normal? (much harder question)
+  
