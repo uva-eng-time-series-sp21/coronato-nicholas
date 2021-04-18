@@ -43,7 +43,7 @@ library("googledrive")
 # WARNING : this is a large file (about 118MB). The googledrive package should install this to your current working directory, and the following code chunk should be able to read it in to R. You may need to confirm your Google account token in the R console when running this particular chunk. Either way, R should give you a message to inform you where the file was downloaded on your local machine.
 
 t100_raw <- drive_download(
-  "5year_t100_data.csv",
+  file = sharedrive,
   path = "5year_t100_data.csv",
   overwrite = TRUE
 )
@@ -170,7 +170,7 @@ ggplot(big3, aes(x = TotalRPM, fill = UNIQUE_CARRIER)) +
   facet_grid(YEAR ~ .)
 ```
 
-```{r}
+```{r, warning=FALSE}
 #Seasonal plot
 big3 %>%
   feasts::gg_season(TotalPax, labels = "both") + ylab("Total Passengers per Month")
