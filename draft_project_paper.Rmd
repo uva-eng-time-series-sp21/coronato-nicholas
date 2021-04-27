@@ -1,0 +1,626 @@
+---
+title: "US Passenger Airline Post-Pandemic Recovery"
+subtitle: "SYS 5581: Time Series Analysis"
+author: Nicholas Coronato
+institution: University of Virginia
+output: 
+  pdf_document:
+    number_sections: TRUE
+    # fig_width: 8
+    # fig_height: 4
+    df_print: kable
+    extra_dependencies: ["flafter"]
+fontsize: 11pt
+geometry: margin=1in
+abstract: "This research involves analysis of data from 2015-2020 in order to understand passenger trends in commercial aviation. Data is open source and provided by the US Bureau of Transportation Statistics (BTS). Revenue Passenger Miles, a key indicator of an airline's operational load, can be modeled as a time series. In this research, I provide insight on the forecast for recovery amongst three leading US airline carriers in the post-COVID-19 environment. Autoregressive with Integrated Moving Average models were generated in order to forecast expected domestic Revenue Passenger Miles for three major US airlines. These forecasts provide valuable insight to the air passenger revenue losses experienced in 2020 and the potential for a full recovery in the industry. **keywords: airline, COVID-19, forecasting**"
+keywords: [airline, COVID-19, forecasting]
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+indent: TRUE
+header-includes:
+  - \usepackage{longtable}
+  - \LTcapwidth=.75\textwidth
+  - \linespread{.95}
+  - \usepackage{hyperref}
+  - \usepackage{fullpage}
+  - \usepackage{parskip}
+  - \setlength{\parindent}{1cm}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{multirow}
+  - \usepackage{wrapfig}
+  - \usepackage{float}
+  - \usepackage{colortbl}
+  - \usepackage{pdflscape}
+  - \usepackage{tabu}
+  - \usepackage{threeparttable}
+  - \usepackage[normalem]{ulem}
+---
+
+```{r setup, include=TRUE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      cache= TRUE,     # if TRUE knitr will cache the results to reuse in future knits
+                      fig.width   = 10,       # the width for plots created by code chunk
+                      fig.height  = 7,       # the height for plots created by code chunk
+                      fig.align   = 'center', # how to align graphics in the final doc. 'left', 'right', 'center'
+                      fig.path    = 'figs/')
+```
+
+
+
+# Introduction
+The COVID-19 pandemic brought leisure and business air travel to a near-screeching halt in the second quarter of calendar year 2020. Fear of the coronavirus's transmissibility and lethality kept many Americans from boarding a plane in non-emergency situations. Additionally, domestic and international policies basically enforced an immediate ban on unnecessary travel. As one would expect, this has severely impacted the entire travel industry.  Experts propose that a full recovery could take upwards of 2.5 years [https://www.researchgate.net/publication/342091867_Forecasting_Recovery_Time_in_Air_Transport_Markets_in_the_Presence_of_Large_Economic_Shocks_COVID-19 ; https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3623040]. 
+
+Smaller airlines may not have that much time to stay afloat; several regional airlines in the US and abroad have already folded. The US airline giants have felt a certain effect from flight cancellations, policy changes, and incurred costs for healthy safety measures. 
+  
+  This project aims to utilize time series analysis methods to answer a complicated question about commercial aviation:
+  
+  
+  ***How should we expect the largest US passenger airlines to operate in the aftermath of COVID-19?***
+
+  This question is one of many that will be asked in the coming months, as the demand for personal transportation is expected to eventually return to pre-pandemic levels or higher. The stakeholders in this industry are numerous: not just business travelers and vacationers or airline companies themselves, but practically anybody with a role or vested interest in moving people or things around the globe. The pace and magnitude of recovery for the air travel industry will have third order implications on fuel prices, employment rates, business logistics, the global economy, and so on. This particular question is important because it seeks to provide predictive insight to how the US airline giants will be expected to operate if the travel demand resumes in 2021 or 2022. If they can predict this, the airlines should be able to strategically ramp up and meet the demand. If they do not forecast appropriately, they may fail, this will affect nearly everybody in some way.
+  
+  I attempt to answer this question by generating an accurate forecasting model for three large US airlines. The major assumption, designed to reduce problem complexity, is that our largest airlines will be the most likely to survive the pandemic period, and that they are representative of the domestic air travel market at large. The airlines under study - Delta, American, and United - undoubtedly have some of the greatest resources at their disposal, and therefore were decently postured to take on the sudden drop in demand for passenger travel. Another assumption is that future demand for air travel will be roughly equal to the levels seen in the data prior to Quarter 1, Calendar Year 2020. 
+  
+  The final models use historical data to identify Revenue Passenger Mile trends right up to the COVID-19 onset, and then forecast the expected output (RPM) of Delta, American, and United if normal travel resumes.
+
+
+## Metrics
+
+**Revenue Passenger Miles (RPM)**, a key indicator of an airline's operational load, can be modeled as a time series. 
+
+ $$Revenue Passenger Miles (RPM) = Number of Paying Passengers * Distance Traveled$$
+
+## The Data
+Data for this research is downloaded from the BTS website: [https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIM].  This website allows the user to select key metrics of airline performance by market (domestic segment or international) and by year, along with several other filters. I extracted the raw data (2015 Jan - 2020 Nov) for the following features:
+
+1. Departures Scheduled [integer]
+2. Departures Performed [integer]
+3. Payload (pounds gross weight) [integer]
+4. Seats [integer]
+5. Passengers [integer]
+6. Distance (miles) [integer]
+7. Air Time (minutes) [integer]
+8. Unique Carrier (Airline identifier) [factor]
+9. Origin Airport ID (five digit code) [factor]
+10. Origin City Name [factor]
+11. Origin State Name [factor]
+12. Origin Country [factor]
+13. Destination Airport ID (five digit code) [factor]
+14. Destination City Name [factor]
+15. Destination State Name [factor]
+16. Aircraft Type [factor]
+17. Year
+18. Quarter
+19. Month
+
+  The data I downloaded is structured as 1,031,938 rows of a .csv file, with headers that indicate each of the columns (features) identified above. Each row entry, or observation, is a flight segment. A domestic flight segment is defined as any route that terminated in the United States or its territories; it could have originated anywhere. 
+
+  Most route segments were executed multiple times throughout the time period, as indicated by the "Departures Performed" column. If multiple departures of the same segment were performed, the data is already captured in such a way that the other variables were updated; in other words, if two departures of a 100-passenger segment were conducted, then the corresponding "PASSENGERS" column indicates "200" for that segment. I did not have to multiply $(2 * 100)$ to manually calculate for repeat segments.
+  
+  I processed the raw data to fit the requirements of a tidy time series set. This required an aggregation of metrics at a *monthly* frequency. For example, all of the United Airlines segments during January 2015 were summed to form new features: Total Passengers, Total Air Time, etc. The time period of interest was January 2015 to November 2020. This produced 71 monthly observations for each of the "Big 3" airlines, which is a total of 213 data points for each metric. A monthly interpretation of historical travel data seemed most relevant and stable, as it appropriately highlights the seasonal trends of the year without being too granular.
+
+```{r load libraries, include = FALSE}
+# Call the appropriate libraries.
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(data.table)
+library(fable)
+library(googledrive)  #Used for reading CSV file from my Google Drive folder
+library(knitr)
+library(kableExtra)
+library(feasts)
+
+options(scipen = 8)
+# options(knitr.table.format = "latex")
+options(tinytex.verbose = TRUE)
+```
+```{r, include = FALSE}
+.onLoad <- function(libname = find.package("kableExtra"), pkgname = "kableExtra") {
+  if (knitr::is_latex_output()) {
+    load_packages <- getOption("kableExtra.latex.load_packages", default = TRUE)
+    if (load_packages) {
+      usepackage_latex("booktabs")
+      usepackage_latex("longtable")
+      usepackage_latex("array")
+      usepackage_latex("multirow")
+      usepackage_latex("wrapfig")
+      usepackage_latex("float")
+      usepackage_latex("colortbl")
+      usepackage_latex("pdflscape")
+      usepackage_latex("tabu")
+      usepackage_latex("threeparttable")
+      usepackage_latex("threeparttablex")
+      usepackage_latex("ulem", "normalem")
+      usepackage_latex("makecell")
+      # usepackage_latex("xcolor")
+    }
+  }
+  auto_format <- getOption("kableExtra.auto_format", default = TRUE)
+  if (auto_format) auto_set_format()
+  if (!is.null(rmarkdown::metadata$output) &&
+      rmarkdown::metadata$output %in% c(
+        "ioslides_presentation", "slidy_presentation",
+        "gitbook", "bookdown::gitbook", "radix_article", "radix::radix_article",
+        "distill_article", "distill::distill_article"
+      )) {
+    options(kableExtra.html.bsTable = TRUE)
+  }
+  if (!is.null(knitr::opts_knit$get("rmarkdown.pandoc.to")) &&
+      knitr::opts_knit$get("rmarkdown.pandoc.to") %in% c("epub3", "epub")) {
+    options(kableExtra.knit_print.dependency = FALSE)
+  }
+}
+```
+
+```{r Read in data, include = FALSE, message = FALSE, cache = TRUE}
+t100_raw  <-  read_delim("5year_t100_data.csv",",",
+                         col_types = cols(.default = col_character(),
+                                          "YEAR" = col_integer(),
+                                          "MONTH" = col_integer(),
+                                          "UNIQUE_CARRIER" = col_factor(),
+                                          "PASSENGERS" = col_integer(),
+                                          "DISTANCE" = col_integer(),
+                                          "ORIGIN_AIRPORT_ID" = col_factor(),
+                                          "ORIGIN_STATE_NM" = col_factor(),
+                                          "DEST_AIRPORT_ID" = col_factor(),
+                                          "DEST_STATE_NM" = col_factor(),
+                                          "SEATS" = col_integer(),
+                                          "AIR_TIME" = col_integer()
+                                                  ))
+```
+```{r, include = FALSE, message = FALSE, cache = TRUE}
+t100_raw %>% 
+  mutate(., RPM = PASSENGERS * DISTANCE) %>% 
+  select(YEAR, MONTH, UNIQUE_CARRIER, PASSENGERS, DISTANCE, RPM, -ORIGIN_AIRPORT_ID, -ORIGIN_CITY_NAME, -ORIGIN_STATE_NM, -DEST_AIRPORT_ID, -DEST_CITY_NAME, -DEST_STATE_NM, SEATS, AIR_TIME, -PAYLOAD, -ORIGIN_COUNTRY, -ORIGIN_COUNTRY_NAME, -DATA_SOURCE) -> t100_raw
+```
+```{r Generate index variable for tsibble, include = FALSE, message = FALSE, cache = TRUE}
+# Put together YEAR and MONTH into a single column called YRMO
+t100_raw %>% 
+  mutate(YRMO = paste(t100_raw$YEAR, t100_raw$MONTH)) ->t100_raw
+
+# Convert YRMO to a time series object column (year month) and re-arrange
+t100_raw %>% 
+  mutate(YRMO = yearmonth(YRMO))  %>% 
+  select(YRMO, everything())-> t100_raw2
+
+# Create summary values for Passengers, RPM, Distance, Seats, and Air_time that will prevent us from having duplicates. These stats are now rolled up monthly by airline 
+t100_raw2 %>% 
+  group_by(YRMO, YEAR, MONTH, UNIQUE_CARRIER) %>%
+  summarize(TotalPax=sum(PASSENGERS), TotalRPM = sum(RPM), TotalDistance = sum(DISTANCE), TotalSeats = sum(SEATS), TotalAIR_TIME = sum(AIR_TIME))  -> t100_raw3
+
+# convert to tsibble
+as_tsibble(t100_raw3, index = YRMO, key = UNIQUE_CARRIER) -> t100_ts_tbl
+```
+
+Table 1 is a sample of the data after processing. 
+
+```{r Generate tsibble, echo = FALSE, cache = TRUE, eval = TRUE}
+#Filter to see just the 3 Major Airlines: Delta American and United
+
+t100_ts_tbl %>%  filter(UNIQUE_CARRIER  %in% c("DL","AA","UA")) -> big3
+as_tsibble(big3, index = YRMO, key = UNIQUE_CARRIER) -> big3
+big3.kable <- kable(head(big3[,2:7],6), booktabs = TRUE, caption = 'A portion of the first six rows of the Domestic Airline Passenger data.')  %>% kable_styling(full_width=TRUE, font_size = 10) 
+# %>% row_spec(0, angle = 45)
+
+big3.kable #Print tsibble
+```
+
+
+## Assumptions
+To facilitate analysis, some assumptions were applied to help fit models to the real world environment. 
+
+1. *Assume that the "Big 3" airlines can show trends that are representative of the entire US passenger airline industry.* American Airlines is the second largest airline in the world based on sales in 2019 [https://www.statista.com/statistics/250577/domestic-market-share-of-leading-us-airlines/]. Hartsfield-Jackson Atlanta International Airport, Delta's hub, sees the most passenger traffic in the United States [https://www.statista.com/statistics/250577/domestic-market-share-of-leading-us-airlines/]. Every year, United Airlines puts more than 40 million passengers through George Bush International Airport in Houston. Statista reported that American (19.3%), Delta (15.5%), and United Airlines (12.4%) combined to produce just under half of all domestic revenue passenger miles in 2020. By focusing on these three airlines, I show conclusions that are generalizable and representative of the larger passenger airline industry.
+
+2. *Assume that RPM is indeed the proper metric to measure operational capacity of a particular carrier.* Other metrics are available, but none are as illuminating as RPM for understanding traffic volume. [https://www.investopedia.com/terms/r/revenue-passenger-mile-rpm.asp#:~:text=A%20revenue%20passenger%20mile%20(RPM,passengers%20by%20the%20distance%20traveled]. When coupled with Available Seat Miles (ASM), airline experts can calculate their "load factor." I use RPM to investigate operational capacity and discover differences in strategy between the three major airlines.
+
+3. *Assume that data from 2015 - 2019 is sufficient for modeling (56 monthly observations).* The modeling process showed that historical data was sufficient to extract patterns and generate robust forecasts. Including older data significantly increased processing time, without any noticeable gain in model accuracy.
+
+4. *Assume that changes in external forces and passenger preferences do not hold a significant bearing on RPM.* This is an important assumption. Besides the obvious difference in physical structures and sizes of each airline company, they do not exist in a secluded bubble. The global and domestic economy have a role in this environment. For this research, I tried to disassociate the RPM metric from any environmental forces by generating models from relatively low-entropy, recent data. COVID-19 effects were left out of the analysis, except to conduct comparisons after forecasts were made. In reality, strategic corporate decisions and governmental policies (especially during the pandemic) would certainly have an impact on routes flown and passengers boarded. Carrier partnerships and alliances can further complicate the understanding of airline strategies. Additionally, to model the specific preferences of passengers - i.e., why they would choose one airline over another for their travel needs - would be a separate time series analysis to be explored in future work.
+
+
+# Data Exploration
+
+## Historical (2015-2019)
+The figures below capture the time series of interest. Revenue Passenger Miles can be plotted (monthly) to see a generally similar shape for each airline. The shape of this annual pattern is indicative of seasonality; one would expect that passenger air travel has peaks and troughs throughout the year based on season, climate, and school calendars.
+
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#Show total Revenue Passenger Miles (RPM) trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalRPM, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly RPM") + labs(caption = "Figure 1. Revenue Passenger Miles (RPM), monthly, 2015 Jan to 2020 Nov.")
+```
+
+When isolating the Passengers (regardless of Miles flown in RPM), one notices a difference. United Airlines produces a consistently lower *TotalPax* count. 
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+#Show total passengers trend since 2015 Jan
+ggplot(data = big3, mapping = aes(x = YRMO, y = TotalPax, color = UNIQUE_CARRIER)) + geom_line() + ggtitle("3 Major Airlines Monthly Passengers") + scale_y_continuous() +labs(title = "Passengers, monthly, 2015 Jan - 2020 Nov", caption = "Figure 2. Passenger counts, monthly, 2015 Jan to 2020 Nov.")
+```
+
+
+The red line for UA is a similar shape to DL and AA, but shifted down by about 5 million passengers per month. However, I noticed that they are near the same level of production of Revenue Passenger Miles. United Airlines moves way fewer passengers, but possibly over longer domestic routes, therefore producing a comparable RPM value every month. The next section investigates this effect further.
+
+### Different Corporate Strategies
+Figure 3 shows the density of each airline's monthly Distances Flown. There seems to be evidence that the 3 airlines under investigation do have different strategies in terms of route lengths/distance flown in this data set. This could be a function of their actual corporate strategy, or just the nature of their "hub" locations, or even totally random. The chart below breaks it out by year and shows that United Airlines seems to fly longest distance routes (on average), American Airlines flies the shortest routes, and Delta's flight distance distribution is widely spread.
+
+
+```{r, echo = FALSE}
+#Display density plots of distance flown between the 3 carriers
+ggplot(big3, aes(x = TotalDistance, fill = UNIQUE_CARRIER)) +
+  geom_density(position = "identity", alpha = 0.4, color = "black") + labs(title = "Density of Monthly Miles Flown", caption = "Figure 3. Density plot to show differences in airline strategies.")
+```
+
+### Seasonality
+The Seasonal Plot in the figure below shows a pretty clear representation of the seasonal trends in air travel amongst these three airlines. (Note: Y-axis is not consistent; adjusted for each airline). 
+
+```{r, warning=FALSE, echo = FALSE}
+#Seasonal plot
+big3 %>%
+  feasts::gg_season(TotalPax, labels = "both") + ylab("Total Passengers per Month") + labs(title = "Seasonal Plot for Passenger Counts", caption = "Figure 4. Seasonal plot for RPM in the three airlines, 2015-2020.")
+```
+
+Prior to 2020, the most popular year for air travel was 2018 (according to most metrics of interest here). Seasonal trends are somewhat as one would expect for air travel. We can see that February and September are the low points for passengers being transported, and the summer and holiday months create a spike for these three airlines.
+
+There was an interesting phenomenon for American Airlines in summer 2015, where their Total Passenger count increased greatly. AA did place "the 'largest aircraft order in history' in July 2011, purchasing 460 'next generation' Boeing 737 and Airbus A320 aircraft for delivery between 2013 and 2022. Also, 2015 was the year they completed a merger with US Airways: On April 8, 2015, the Federal Aviation Administration awarded American Airlines and US Airways a single operating certificate." Therefore, the BTS began counting the former-US Airways flights as part of American Airlines in April 2015 [https://en.wikipedia.org/wiki/History_of_American_Airlines]. Because of this anomaly year, calendar year 2015 was removed from further analysis and model generation for American Airlines only. The other two airlines showed no such issue, and therefore maintained 60 monthly observations for model generation.
+
+
+# Model Development
+Revenue Passenger Miles over time is modeled using an Autoregressive Integrated Moving Average (ARIMA model) with seasonal and non-seasonal components. Each airline's historical data was fit with a unique model and parameters. This enables us to study both individual airline and aggregated group forecasts. To generate models, only observed RPM through December 2019, *prior to any effects from COVID-19*, were included. The ARIMA modeling procedure was borrowed from *Forecasting Principles and Practice, 3rd edition.*
+
+The ARIMA models were generated after a study of the autocorrelation charts for each airline's time series. Figure 5 shows ACF with a one-month lag. These charts show a slow decline in ACF over approximately six months, indicating non-stationarity.
+
+
+```{r, message = FALSE, echo = FALSE}
+preCovid <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER %in% c("UA",'DL','AA')) %>% 
+  filter(YEAR < 2020) %>%
+  select(YRMO, TotalRPM)
+
+#create a UAtravel subset, which is United Airlines pre-2020
+UAtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="UA") %>%
+  ungroup() 
+  # select(TotalRPM, YRMO) 
+
+#create a DLtravel subset, which is Delta Airlines pre-2020
+DLtravel <- preCovid %>%
+  filter(UNIQUE_CARRIER=="DL") 
+  # select(YEAR, MONTH, TotalRPM, -YRMO)
+
+#create a AAtravel subset, which is American Airlines Jan2016-Dec2019
+
+#NOTE: For UA only, I excluded 2015 altogether, as it seemed to be an anomaly year with an unprecedented RPM increase, likely attributed to corporate re-structuring and acquisition of another airline's assets. So AAtravel models are built from the 48 months between 2016JAN and 2019DEC. This model ended up being quite good when the 2015 data was discounted.
+
+AAtravel <- big3 %>% 
+  group_by(UNIQUE_CARRIER) %>%
+  filter(UNIQUE_CARRIER =='AA') %>% 
+  filter(YEAR < 2020) %>%
+  filter(YEAR > 2015) %>% 
+  select(YRMO, TotalRPM) %>% 
+  ungroup()
+```
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+preCovid %>% 
+  ACF(TotalRPM) %>% 
+  autoplot(xlab = "Lag [1 month]", title="Figure 5. Autocorrelation Features of the historical data.", caption = "Figure 5. Autocorrelation Features of the historical data.")
+```
+
+A technique called Guerrero features search was used to find the optimal $\lambda$ values to be used in a Box Cox transformation. The goal was to make the size of seasonal variation about the same across time series. After transformation, the first-difference and second-difference can be analyzed to help determine which values to use for parameters (p,d,q) and (P,D,Q) of the seasonal ARIMA models. Optimal $\lambda$ values were determined to be 0.96 (United), 0.131 (Delta), and 
+
+Spectral entropy was computed to measure the noise in each data subset. A series which has strong trend and seasonality shows entropy value close to 0; it should be easier to forecast. Alternatively, a series that is very noisy and difficult to forecast would show entropy value close to 1. Table 2 shows that the noisiest series is United Airlines, but they are all below 0.55.
+
+
+```{r, echo=FALSE}
+#alternate way to automatically extract optimal Lambda:
+EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->UAboxcox
+EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->DLboxcox
+EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE)$data %>% as_tibble() ->AAboxcox
+
+
+# transform the data: new preCovid data sets are UAtransform, DLtransform, AAtransform
+UAtransform <- bind_cols(UAtravel, UAboxcox)
+#print(EnvStats::boxcox(UAtravel$TotalRPM,  optimize = TRUE))  
+
+DLtransform <- bind_cols(DLtravel, DLboxcox)
+#print(EnvStats::boxcox(DLtravel$TotalRPM,  optimize = TRUE))
+
+AAtransform <- bind_cols(AAtravel, AAboxcox)
+#print(EnvStats::boxcox(AAtravel$TotalRPM,  optimize = TRUE))
+
+entropy <- tibble("UA entropy" = feat_spectral(UAtransform$TotalRPM, 12),"DL entropy" = feat_spectral(DLtransform$TotalRPM, 12), "AA entropy" = feat_spectral(AAtransform$TotalRPM, 12))
+                  
+kable(entropy, booktabs = TRUE, caption = "Shannon Spectral Entropy for each airline RPM data set.") %>% kable_styling(full_width=TRUE, font_size = 10)
+```
+
+### Stationarity
+
+Since the data was non-stationary, we took first differences of the data until the data were stationary. 
+The data for all three airlines appeared non-stationary, with an overall declining trend. The process is briefly depicted below for United Airlines..
+
+Below is a **United Airlines** Difference plot, generated with the *feasts* package in R Software. 
+
+
+Figure 6. United Airlines, seasonally differenced.
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12),
+               plot_type='partial') + labs(title="UA Seasonally differenced", y="", caption = "Figure 6. United Airlines, seasonally differenced.")
+```
+
+
+There is still clearly non-stationarity, so a further first difference was taken.
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+UAtransform %>% 
+  gg_tsdisplay(difference(TotalRPM, 12) %>%  difference(), 
+               plot_type='partial') + labs(title="UA Double differenced", y="", caption = "Figure 7. United Airlines, second seasonal difference.")
+```
+
+This figure indicates that we now have a double-differenced ACF and PACF from which to generate the ARIMA model for United Airlines. This process was repeated for the other two airlines.
+
+## feasts::ARIMA()
+
+Using the *ARIMA* function in the *feasts* package, three variations of ARIMA model were generated for *each* airline:
+
+1. ARIMA with user-defined parameters *p, d, q, P, D, Q* (based on visual assessment of ACF/PACF)
+
+2. ARIMA without step-wise searching (stepwise = FALSE, approx = FALSE) for the full search of possible parameters
+
+3. ARIMA with a stepwise search (stepwise = TRUE), for the quicker search
+
+*Feasts* automatically reported the best models. Minimum AICc was the metric chosen for rank ordering the results.:
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+fitUA <- UAtravel %>% 
+  model(
+    ARIMA300811 = ARIMA(TotalRPM ~ pdq(0,1,3) + PDQ(4,1,0)),
+    UAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    UAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitDL <- DLtravel %>% 
+  model(
+    ARIMA410100 = ARIMA(TotalRPM ~ pdq(4,1,0) + PDQ(1,0,0)),
+    DLauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    DLstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+
+fitAA <- AAtravel %>% 
+  model(
+    ARIMA010520 = ARIMA(TotalRPM ~ pdq(0,1,0) + PDQ(5,2,0)),
+    AAauto = ARIMA(TotalRPM, stepwise = FALSE, approx = FALSE),
+    AAstepwise = ARIMA(TotalRPM, stepwise = TRUE)
+    )
+```
+
+
+
+## Results: Best Models
+After generating two to three unique models for each airline, AICc was used to identify the best fit. Tables 3-5 display the results. Feasts did not output statistics for some of the ARIMA models with manually chosen parameters, as they were found to be unstable.
+
+
+```{r, echo = FALSE}
+# glance(fitUA)
+UAmodeltidy <- broom::tidy(fitUA) #model coefficients
+kable(UAmodeltidy, booktabs = TRUE, caption = "United Airlines models:") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+```
+
+
+
+```{r, echo = FALSE}
+# glance(fitDL)
+DLmodeltidy <- broom::tidy(fitDL) #model coefficients
+kable(DLmodeltidy, booktabs = TRUE, caption = "Delta Airlines models:") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+```
+
+
+```{r, echo = FALSE}
+# glance(fitAA)
+AAmodeltidy <- broom::tidy(fitAA) #model coefficients
+kable(AAmodeltidy, booktabs = TRUE, caption = "American Airlines models:") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+```
+
+
+**United best model: UAauto**
+
+fitUA Model formulation:
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi =  0.9481228$     
+  
+  [MA(1) component] $\Theta = -0.4742058$ 
+
+
+
+**Delta best model: DLauto**
+
+fitDL Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [MA(1) component] $\Theta = -0.7399767$ 
+
+
+**American best model: AAauto**
+
+fitAA Model formulation: 
+
+$$(1 - \phi_{1}B)~(1 - \Phi_{1}B^{12}) (1 - B) (1 - B^{12})y_{t} =
+  (1 + \theta_{1}B)~ (1 + \Theta_{1}B^{12})\varepsilon_{t}$$
+  
+  and the optimal parameters: 
+  
+  [AR(1) component] $\phi{1} =  -0.8590480$ 
+  
+  [AR(2) component] $\phi_{2} =  -0.5542507$ 
+  
+  [seasonal AR(1) component] $\Phi_{1} = -0.6003123$ 
+  
+  
+## Analyzing model residuals
+Before using the best models for forecasting RPM output, the residuals were checked. The residuals of the fit model to the historical observations should resemble white noise at this point. This was confirmed via visual inspection of the residual plots, as well as a Ljung-Box test (results in the tables). The large p-values shown in the table indicate that our seasonal ARIMA models have all passed the checks and are ready for forecasting.
+
+```{r, echo = FALSE}
+ljungUA <- augment(fitUA) %>% features(.innov, ljung_box, lag=24, dof=4) 
+kable(ljungUA, booktabs = TRUE, caption = "Ljung-Box results for United Airlines model.") %>% kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+ljungDL <- augment(fitDL) %>% features(.innov, ljung_box, lag=24, dof=4)
+kable(ljungDL, booktabs = TRUE, caption = "Ljung-Box results for Delta Airlines model.") %>%  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+ljungAA <- augment(fitAA) %>% features(.innov, ljung_box, lag=24, dof=4)
+kable(ljungAA, booktabs = TRUE, caption = "Ljung-Box results for American Airlines model.") %>%  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover", "condensed"), font_size = 8)
+```
+
+# Forecasting 2021 and Beyond
+Once the residuals become consistent with white noise process, forecasts could be calculated. For the purposes of this analysis, 36 months of RPM response were forecasted from January 2020. This allows for a comparison of forecasted airline operations to actual COVID-19 effects during 2020.
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitUA, h=36) %>%
+  filter(.model=='UAauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted United Airlines Revenue Passenger Miles",
+       y="RPMs", caption = "Figure 8. UA Forecast")
+```
+
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitDL, h=36) %>%
+  filter(.model=='DLauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted Delta Airlines Revenue Passenger Miles",
+       y="RPMs", caption = "Figure 9. DL Forecast")
+```
+
+
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+forecast(fitAA, h=36) %>%
+  filter(.model=='AAauto') %>%
+  autoplot(big3) +
+  labs(title = "Forecasted American Airlines Revenue Passenger Miles",
+       y="RPMs", caption = "Figure 10. AA Forecast")
+```
+
+```{r, echo = FALSE}
+UAforecast <- forecast(fitUA, h=36) %>%
+  filter(.model=='UAauto')
+UAforecast2020 <- forecast(fitUA, h=11) %>%
+  filter(.model=='UAauto')
+
+DLforecast <- forecast(fitDL, h=36) %>%
+  filter(.model=='DLauto')
+DLforecast2020 <- forecast(fitDL, h=11) %>%
+  filter(.model=='DLauto')
+
+AAforecast <- forecast(fitAA, h=36) %>%
+  filter(.model=='AAauto')
+AAforecast2020 <- forecast(fitAA, h=11) %>%
+  filter(.model=='AAauto')
+```
+
+
+# Conclusions
+By comparing actual 2020 RPM responses to expected mean forecast for 2020, we calculated "Losses" experienced by each airline with simple subtraction.
+
+$$Loss = mean forecast for 2020 - actual RPM in 2020$$
+
+```{r, echo = FALSE, message = FALSE}
+#How much did they lose each month of 2020?
+UAlosses <- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "UA")
+UAlosses <- bind_cols(UAforecast2020, UAlosses) %>% mutate(loss = (.mean-TotalRPM...11))
+UAlosses <- UAlosses[,c(5,6,7,8,9,11,15)]
+DLlosses<- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "DL")
+DLlosses <- bind_cols(DLforecast2020, DLlosses)%>% mutate(loss = (.mean-TotalRPM...11))
+DLlosses <- DLlosses[,c(5,6,7,8,9,11,15)]
+AAlosses<- filter(big3, YEAR == 2020) %>% filter(UNIQUE_CARRIER == "AA")
+AAlosses <- bind_cols(AAforecast2020, AAlosses)%>% mutate(loss = (.mean-TotalRPM...11))
+AAlosses <- AAlosses[,c(5,6,7,8,9,11,15)]
+names(UAlosses)[1] <- "Expected"
+names(DLlosses)[1] <- "Expected"
+names(AAlosses)[1] <- "Expected"
+names(UAlosses)[6] <- "Actual"
+names(DLlosses)[6] <- "Actual"
+names(AAlosses)[6] <- "Actual"
+```
+```{r, echo = FALSE}
+
+losses <- tibble("United 2020 Losses" = sum(UAlosses$loss), "Delta 2020 Losses" = sum(DLlosses$loss), "American 2020 Losses" = sum(AAlosses$loss))
+
+kable(losses, booktabs = TRUE, caption = "Consolidated RPM losses from Calendar Year 2020.") %>%  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover", "condensed"), font_size = 10)
+```
+
+This is better understood with a visual chart of monthly losses experienced during 2020. Figure 11 highlights the worst case: Delta Airlines missed 11.4 billion RPMs in July 2020; that's nearly 83% lost from the monthly domestic RPM forecast. We can be fairly certain that international passenger revenue was even lower during this time, as foreign travel is still highly restricted in Spring 2021.
+
+Figure 11. Monthly Domestic RPM discrepancies for 2020, Big 3 airlines.
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+combinedlosses <- bind_rows(UAlosses,DLlosses,AAlosses)
+names(combinedlosses)[7] <- "RPMLost"
+
+ggplot(data = combinedlosses, aes(x=YRMO, y = RPMLost, fill = UNIQUE_CARRIER)) + geom_bar(stat = "identity",position=position_dodge()) + labs(title = "Monthly 2020 Losses", caption = "Figure 11. Monthly Domestic RPM Discrepancies.")
+```
+
+In order to provide some valuable feedback to the airlines and the public, we describe the "Expected Future Output" of the Big 3 airlines. This is a target based on our forecast and the assumption that domestic travel demand will return to pre-pandemic levels.
+
+By December 2022, the airlines should be prepared to produce the following quantities of Revenue Passenger Miles:
+
+1. _United Airlines_: 9,847,539,202 (mean); 963,138,640 (standard deviation)
+
+2. _Delta Airlines_: 13,598,129,068 (mean); 1,034,827,819 (standard deviation)
+
+3. _American Airlines_: 12,553,411,733 (mean); 955,606,734 (standard deviation)
+
+---
+
+The time series analysis of these three airlines' operations is enlightening, but it leaves several questions unanswered:
+
+- How long will it take the Big 3 to reach their pre-COVID levels? summer peak?
+
+- How long will it take these airlines to recoup the losses we just visualized?
+
+- Since "Revenue Passenger Miles" are a function of dollars and passengers, can the companies affect dollars collected without the ability to increase passenger counts?
+
+- What changes in strategy could we recommend to these airlines to help them cope? There may be a benefit to adopting longer flight routes, selling some airplanes, or partnering with other regional outfits.
+
+- How long can the large airlines survive if passenger airline trends do not return to normal? How long can the smaller airlines survive? These are much more challenging questions.
+
+## Limitations
+
+- Did not look at international travel. International travel RPMs probably declined even closer to zero (when compared to domestic during 2020). This data set is much larger, but the same techniques could be applied.
+- Did not account for Available Seat Miles, another useful metric in determining an airline's operational load. This data was not readily available from the BTS.
+- Did not look at cargo transport effects from COVID-19. Each of these airlines also profits from additional payload, stored under the plane. This type of data is available from the BTS.
+
+## Future Work
+
+- Analysis of passenger preferences over time. This could include departure and arrival location preferences (by season) and airline brand preferences. Accurate market analysis will be critical for the airline companies to recover quickly.
+- Focus on the impacts of particular policies. Changes in policies at the airline and airport level could mitigate some of the restriction-type policies enacted by the state and federal government agencies.
+- Analysis of the smaller airlines. It is possible that they fared worse through the pandemic, with fewer resources to begin with. Alternatively, their losses may have been less extreme, as they are typically not as involved in the international market.
+
+---
+\newpage
+
+# References {-}
+
+1. [https://en.wikipedia.org/wiki/History_of_American_Airlines].
+
+2. [https://www.researchgate.net/publication/342091867_Forecasting_Recovery_Time_in_Air_Transport_Markets_in_the_Presence_of_Large_Economic_Shocks_COVID-19]
+
+3. [https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3623040]
+
+4. [https://www.statista.com/statistics/250577/domestic-market-share-of-leading-us-airlines/]
+
+5. [https://www.investopedia.com/terms/r/revenue-passenger-mile-rpm.asp#:~:text=A%20revenue%20passenger%20mile%20(RPM,passengers%20by%20the%20distance%20traveled]
+
